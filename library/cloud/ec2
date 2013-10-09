@@ -421,6 +421,15 @@ def create_instances(module, ec2):
     else:
         changed = True
         try:
+            # Setting assign_public_ip without vpc_subnet_id only makes sense in the context of VPC usage.
+            if assign_public_ip and not vpc_subnet_id:
+                module.fail_json(msg="assign_public_ip only available with vpc_subnet_id")
+                    
+            interface = boto.ec2.networkinterface.NetworkInterfaceSpecification(subnet_id=vpc_subnet_id,
+                                                                                groups=group_id,
+                                                                                associate_public_ip_address=assign_public_ip)
+            interfaces = boto.ec2.networkinterface.NetworkInterfaceCollection(interface)
+
             params = {'image_id': image,
                       'key_name': key_name,
                       'client_token': id,
@@ -433,21 +442,16 @@ def create_instances(module, ec2):
                       'kernel_id': kernel,
                       'ramdisk_id': ramdisk,
                       'subnet_id': vpc_subnet_id,
-                      'associate_public_ip_address': assign_public_ip,
                       'private_ip_address': private_ip,
                       'user_data': user_data,
-                      'instance_profile_name': instance_profile_name}
+                      'instance_profile_name': instance_profile_name,
+                      'network_interfaces': interfaces}
 
             if vpc_subnet_id:
                 params['security_group_ids'] = group_id
             else:
                 params['security_groups'] = group_name
 
-            # Setting assign_public_ip without vpc_subnet_id 
-            # only makes sense in the context of VPC usage.
-            if assign_public_ip and not vpc_subnet_id:
-                module.fail_json(msg="assign_public_ip only available with vpc_subnet_id")
-                    
             res = ec2.run_instances(**params)
         except boto.exception.BotoServerError, e:
             module.fail_json(msg = "%s: %s" % (e.error_code, e.error_message))
