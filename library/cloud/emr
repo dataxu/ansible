@@ -204,8 +204,8 @@ def main():
             log_uri={'required': True},
             vpc_subnet_id={'required': False},
             ami_version={'required': False, 'choices': ['1.0', '2.0', 'latest'], 'default': 'latest'},
-            jobflow_role={'default': None, 'aliases': ['iamrole']},
-            visible_to_all_users={'required': False, 'default': False},
+            jobflow_role={'required': True, 'default': None, 'aliases': ['iamrole']},
+            visible_to_all_users={'required': False, 'default': True},
             instance_groups={'required': True, 'type': 'list', 'default': None},
             hive_steps={'type': 'list', 'default': None},
         )
