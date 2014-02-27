@@ -32,25 +32,26 @@ except ImportError:
 class ElasticMapReduceManager(object):
     """ Manages an elastic map reduce cluster. """
 
-    def __init__(self, module, aws_access_key, aws_secret_key, region, ec2_keyname, 
-                 cluster_name, bootstrap_actions, log_uri, vpc_subnet_id, 
-                 ami_version, jobflow_role, visible_to_all_users, instance_groups, 
-                 hive_steps):
+    def __init__(self, _module, _aws_access_key, _aws_secret_key, _region, **kwargs):
 
-        self.module = module
-        self.aws_access_key = aws_access_key
-        self.aws_secret_key = aws_secret_key
-        self.region = region
-        self.ec2_keyname = ec2_keyname
-        self.cluster_name = cluster_name
-        self.bootstrap_actions = bootstrap_actions
-        self.log_uri = log_uri
-        self.vpc_subnet_id = vpc_subnet_id
-        self.ami_version = ami_version
-        self.jobflow_role = jobflow_role
-        self.visible_to_all_users = visible_to_all_users
-        self.instance_groups = instance_groups
-        self.hive_steps = hive_steps
+        self.module = _module
+        self.aws_access_key = _aws_access_key
+        self.aws_secret_key = _aws_secret_key
+        self.region = _region
+
+        if not self.region:
+            self.module.fail_json(msg=str("Either region or EC2_REGION environment variable must be set."))
+
+        self.ec2_keyname = kwargs.get('ec2_keyname')
+        self.cluster_name = kwargs.get('cluster_name')
+        self.bootstrap_actions = kwargs.get('bootstrap_actions')
+        self.log_uri = kwargs.get('log_uri')
+        self.vpc_subnet_id = kwargs.get('vpc_subnet_id')
+        self.ami_version = kwargs.get('ami_version')
+        self.jobflow_role = kwargs.get('jobflow_role')
+        self.visible_to_all_users = kwargs.get('visible_to_all_users')
+        self.instance_groups = kwargs.get('instance_groups')
+        self.hive_steps = kwargs.get('hive_steps')
 
         self.changed = False
         self.data = None
@@ -81,7 +82,7 @@ class ElasticMapReduceManager(object):
         """
 
         try:
-            conn = boto.emr.connect_to_region(self.region, 
+            conn = boto.emr.connect_to_region(self.region,
                                               aws_access_key_id=self.aws_access_key,
                                               aws_secret_access_key=self.aws_secret_key)
             return(conn)
@@ -193,11 +194,8 @@ def main():
     module = AnsibleModule(
         argument_spec=dict(
             ec2_keyname={'required': True},
-            ec2_secret_key={'default': None,
-                            'aliases': ['aws_secret_key', 'secret_key'],
-                            'no_log': True},
-            ec2_access_key={'default': None,
-                            'aliases': ['aws_access_key', 'access_key']},
+            ec2_secret_key={'required': False, 'default': None, 'aliases': ['aws_secret_key', 'secret_key'], 'no_log': True},
+            ec2_access_key={'required': False, 'default': None, 'aliases': ['aws_access_key', 'access_key']},
             region={'required': False, 'default': None, 'aliases': ['aws_region', 'ec2_region'], 'choices': AWS_REGIONS},
             cluster_name={'required': True},
             bootstrap_actions={'type': 'list', 'default': None},
@@ -211,36 +209,10 @@ def main():
         )
     )
 
-    ec2_url, aws_access_key, aws_secret_key, region = get_ec2_creds(module)
-
-    ec2_keyname = module.params['ec2_keyname']
-    cluster_name = module.params['cluster_name']
-    bootstrap_actions = module.params['bootstrap_actions']
-    log_uri = module.params['log_uri']
-    vpc_subnet_id = module.params['vpc_subnet_id']
-    ami_version = module.params['ami_version']
-    jobflow_role = module.params['jobflow_role']
-    visible_to_all_users = module.params['visible_to_all_users']
-    instance_groups = module.params['instance_groups']
-    hive_steps = module.params['hive_steps']
-
-    boto.set_stream_logger('boto')
-
-    if not region:
-        module.fail_json(msg=str("Either region or EC2_REGION environment variable must be set."))
-
-    emrm = ElasticMapReduceManager(module, aws_access_key, 
-                                   aws_secret_key, region, 
-                                   ec2_keyname, cluster_name,
-                                   bootstrap_actions, log_uri, 
-                                   vpc_subnet_id, ami_version,
-                                   jobflow_role, 
-                                   visible_to_all_users, 
-                                   instance_groups, hive_steps)
-
-    # emrm.run_jobflow()
-    facts_result = dict(changed=emrm.changed,
-                        elasticmapreduce=emrm.get_info())
+    _, aws_access_key, aws_secret_key, region = get_ec2_creds(module)
+    emrm = ElasticMapReduceManager(module, aws_access_key, aws_secret_key, region, **module.params)
+    emrm.run_jobflow()
+    facts_result = dict(changed=emrm.changed, elasticmapreduce=emrm.get_info())
 
     module.exit_json(**facts_result)
 
