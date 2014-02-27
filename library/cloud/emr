@@ -14,121 +14,6 @@
 # You should have received a copy of the GNU General Public License
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 
-DOCUMENTATION = '''
----
-module: emr
-short_description: Manage an EMR cluster
-description:
-    - Create, configure, terminate Elastic MapReduce cluster. This module has a dependency on python-boto >= 2.13.0
-version_added: ""
-options:
-  ec2_keyname:
-    description:
-      - key pair to use on the instance
-    required: true
-    default: null
-    aliases: ['keypair']
-  cluster_name:
-    description:
-      - Name of the cluster
-    required: true
-    default: null
-    aliases: []
-  bootstrap_actions:
-    description:
-      - A dictionary array of bootstrap actions to add to the job flow. {'name':'value', 'action':'value', 'args':'value'}
-    required: false
-    default: None
-    aliases: []
-  log_uri:
-    description:
-      - URI of the S3 bucket to place logs
-    required: false
-    default: null
-    aliases: []
-  vpc_subnet_id:
-    description:
-      - The subnet ID in which to launch the instance (VPC)
-    required: false
-    default: null
-    aliases: []
-  ami_version:
-    description:
-      - A choice of AMI versions. The hadoop version is tied to the AMI version. choices=['1.0', '2.0', 'latest'].
-    required: false
-    default: latest
-    aliases: []
-  jobflow_role:
-    description:
-      - IAM role for the jobflow.
-    required: false
-    default: None
-    aliases: ["iamrole"]
-  visible_to_all_users:
-    description:
-      - Whether or not to expose this jobflow to authorized users.
-    required: false
-    default: false
-    aliases: []
-  instance_groups:
-    description:
-      - A dictionary array of instance groups to add to the job flow. {'group_type': 'value', 'instance_type': 'value', 'spot': 'value', 'bidprice': 'value', 'count': 'value'}
-    required: false
-    default: None
-    aliases: []
-  hive_steps:
-    description:
-      - A dictionary array of hive steps to add to the job flow. {'version': 'value', 'site': 'value'}
-    required: false
-    default: None
-    aliases: []
-
-requirements: [ "boto" ]
-author: Scott Armit
-'''
-
-EXAMPLES = '''
-# Note: None of these examples set aws_access_key, aws_secret_key, or region.
-# It is assumed that their matching environment variables are set.
-
----
-
-- hosts: localhost
-  tasks:
-    - name: emr test
-      local_action:
-        module: emr
-        cluster_name: sarmit-test
-        log_uri: "s3://my-bucket/logs"
-        vpc_subnet_id: subnet-12345678
-        job_flow_role: lockitdown
-        ec2_keyname: my_pem_key
-        visible_to_all_users: True
-        instance_groups:
-          - group_type: master
-            instance_type: m1.xlarge
-            spot: yes
-            bidprice: '0.08'
-            count: 1
-          - group_type: core
-            instance_type: m1.small
-            count: 1
-          - group_type: task
-            instance_type: m1.small
-            count: 1
-        hive_steps:
-          - version: '0.11.0.1'
-            site: 's3://my-bucket/hive/hive-site.xml'
-        bootstrap_actions:
-          - name: 'first'
-            action: 's3://elasticmapreduce/bootstrap-actions/run-if'
-            args: 'instance.isMaster=true,echo running on master node'
-
-          - name: 'second'
-            action: 's3://elasticmapreduce/bootstrap-actions/run-if'
-            args: 'instance.isMaster=false,echo not running on master node'
-'''
-
 import sys
 import time
 from datetime import datetime
@@ -140,193 +25,223 @@ try:
     from boto.emr.step import StreamingStep
     from boto.emr.step import InstallHiveStep
     from boto.emr.bootstrap_action import BootstrapAction
-
 except ImportError:
     print "failed=True msg='boto.emr required for this module'"
     sys.exit(1)
 
-def get_instance_groups(module):
-    """
-    :param module: AnsibleModule object
-    :returns list: list of boto.emr.InstanceGroup objects
-    """
+class ElasticMapReduceManager(object):
+    """ Manages an elastic map reduce cluster. """
 
-    instance_groups = []
-    param_instance_groups = module.params.get('instance_groups')
-    if param_instance_groups:
-        if not isinstance(param_instance_groups, list):
-            module.fail_json(msg='instance_groups needs to be a list of actions')
+    def __init__(self, module, aws_access_key, aws_secret_key, region, ec2_keyname, 
+                 cluster_name, bootstrap_actions, log_uri, vpc_subnet_id, 
+                 ami_version, jobflow_role, visible_to_all_users, instance_groups, 
+                 hive_steps):
 
-        for instance_group in param_instance_groups:
-            group_type = instance_group.get('group_type', None)
-            instance_type = instance_group.get('instance_type', None)
-            instance_count = instance_group.get('count', 1)
-            my_spot = module.boolean(instance_group.get('spot'))
-            my_bidprice = instance_group.get('bidprice', None)
+        self.module = module
+        self.aws_access_key = aws_access_key
+        self.aws_secret_key = aws_secret_key
+        self.region = region
+        self.ec2_keyname = ec2_keyname
+        self.cluster_name = cluster_name
+        self.bootstrap_actions = bootstrap_actions
+        self.log_uri = log_uri
+        self.vpc_subnet_id = vpc_subnet_id
+        self.ami_version = ami_version
+        self.jobflow_role = jobflow_role
+        self.visible_to_all_users = visible_to_all_users
+        self.instance_groups = instance_groups
+        self.hive_steps = hive_steps
+
+        self.changed = False
+        self.data = None
+        self.job_id = None
+
+        self.conn = self.get_elasticmap_reduce_connection()
+        self.jobflow_instance_groups = self.set_jobflow_instance_groups()
+        self.jobflow_bootstrap_actions = self.set_jobflow_bootstrap_actions()
+        self.jobflow_hive_steps = self.set_jobflow_hive_steps()
+        self.jobflow_stream_steps = self.set_jobflow_stream_steps()
+
+    def get_info(self):
+        """ Return basic info about the EMR cluster. """
+
+        info = {
+            'connection': self.conn,
+            'region': self.region,
+            'jobid': self.job_id,
+        }
+        # if self.data:
+        #     info['data'] = self.data
+
+        return info
+
+    def get_elasticmap_reduce_connection(self):
+        """
+        Connect to EMR on specific region.
+        """
+
+        try:
+            self.conn = boto.emr.connect_to_region(self.region, 
+                                                   aws_access_key_id=self.aws_access_key,
+                                                   aws_secret_access_key=self.aws_secret_key)
+
+        except boto.exception.NoAuthHandlerFound, e:
+            self.module.fail_json(msg="Unable to create connection: {0}".format(str(e)))
+
+    def set_jobflow_instance_groups(self):
+        """
+        :param module: AnsibleModule object
+        :returns list: list of boto.emr.InstanceGroup objects
+        """
+
+        jobflow_instance_groups = []
+
+        for ig in self.instance_groups:
+            group_type = ig.get('group_type', None)
+            instance_type = ig.get('instance_type', None)
+            instance_count = ig.get('count', 1)
+            my_spot = self.module.boolean(ig.get('spot'))
+            my_bidprice = ig.get('bidprice', None)
 
             if my_spot:
                 my_market='SPOT'
                 if not my_bidprice:
-                    module.fail_json(msg='SPOT instances require a bidprice')
+                    self.module.fail_json(msg='SPOT instances require a bidprice')
             else:
                 my_market='ON_DEMAND'
 
-            instance_groups.append(InstanceGroup(int(instance_count),
-                                                 group_type.upper(),
-                                                 instance_type,
-                                                 my_market,
-                                                 "{0}_GROUP".format(group_type.upper()),
-                                                 bidprice=my_bidprice))
+            jobflow_instance_groups.append(InstanceGroup(int(instance_count),
+                                                         group_type.upper(),
+                                                         instance_type,
+                                                         my_market,
+                                                         "{0}_GROUP".format(group_type.upper()),
+                                                         bidprice=my_bidprice))
+        return(jobflow_instance_groups)
 
-    return(instance_groups)
+    def set_jobflow_bootstrap_actions(self):
+        """
+        :param module: AnsibleModule object
+        :returns list: list of boto.emr.emrobject.BootstrapAction objects
+        """
 
-def get_hive_steps(module):
-    """
-    :param module: AnsibleModule object
-    :returns list: list of boto.emr.step.InstallHiveStep objects
-    """
+        my_bootstrap_actions = []
 
-    hive_steps = []
-    param_hive_steps = module.params.get('hive_steps')
-    if param_hive_steps:
-        if not isinstance(param_hive_steps, list):
-            module.fail_json(msg='hive_steps needs to be a list of actions')
+        args = []
+        for bootstrap in self.bootstrap_actions:
+            raw_args = bootstrap.get('args', None)
+            if raw_args:
+                args = raw_args.split(',')
 
-        for hive_step in param_hive_steps:
-            version = hive_step.get('version', None)
-            site = hive_step.get('site', None)
-            hive_steps.append(InstallHiveStep(hive_versions=version,
-                                              hive_site=site))
-    return(hive_steps)
+            my_bootstrap_actions.append(BootstrapAction(bootstrap['name'],
+                                                        bootstrap['action'],
+                                                        args))
+        return(my_bootstrap_actions)
 
-def get_stream_steps(module):
-    """
-    :param module: AnsibleModule object
-    :returns list: list of boto.emr.step.StreamingStep objects
-    """
+    def set_jobflow_hive_steps(self):
+        """
+        :param module: AnsibleModule object
+        :returns list: list of boto.emr.step.InstallHiveStep objects
+        """
 
-    stream_steps = []
-    stream_steps.append(StreamingStep(name='sarmit wordcount ansible',
+        jobflow_hive_steps = []
+        for hs in self.hive_steps:
+            version = hs.get('version', None)
+            site = hs.get('site', None)
+            jobflow_hive_steps.append(InstallHiveStep(hive_versions=version,
+                                                      hive_site=site))
+        return(jobflow_hive_steps)
+
+    def set_jobflow_stream_steps(self):
+        """
+        :param module: AnsibleModule object
+        :returns list: list of boto.emr.step.StreamingStep objects
+        """
+
+        current_time = datetime.now().strftime("%Y%m%d%H%M%S")
+        output_log_uri = '{0}/wordcount_output/{1}'.format(self.log_uri, current_time)
+
+        stream_steps = [StreamingStep(name='sarmit wordcount ansible',
                                       mapper='s3n://elasticmapreduce/samples/wordcount/wordSplitter.py',
                                       reducer='aggregate',
                                       input='s3n://elasticmapreduce/samples/wordcount/input',
-                                      output='{0}/wordcount_output/{1}'.format(module.params.get('log_uri'), datetime.now().strftime("%Y%m%d%H%M%S"))))
-    return(stream_steps)
+                                      output=output_log_uri)]
+        return(stream_steps)
 
-def get_bootstrap_actions(module):
-    """
-    :param module: AnsibleModule object
-    :returns list: list of boto.emr.emrobject.BootstrapAction objects
-    """
+    def run_jobflow(self):
+        """
+        :returns EMR object: The ID of the created job flow
+        """
 
-    my_bootstrap_actions = []
+        if self.vpc_subnet_id:
+            my_api_params = {'Instances.Ec2SubnetId': self.vpc_subnet_id}
+        else:
+            my_api_params = None
 
-    bsa = module.params.get('bootstrap_actions')
-    if bsa:
-        if not isinstance(bsa, list):
-            module.fail_json(msg='bootstrap_actions needs to be a list of actions')
-
-    # Pass in comma-separated args as would be done via the command-line.
-    args = []
-    for bootstrap in bsa:
-        raw_args = bootstrap.get('args', None)
-        if raw_args:
-            args = raw_args.split(',')
-
-        my_bootstrap_actions.append(BootstrapAction(bootstrap['name'],
-                                                    bootstrap['action'],
-                                                    args))
-    return(my_bootstrap_actions)
-
-def emr_connect(module):
-    """
-    :param module: AnsibleModule object
-    :returns : EMR connection object
-    """
-
-    _, aws_access_key, aws_secret_key, region = get_ec2_creds(module)
-    validate_certs = module.params.get('validate_certs', True)
-
-    # If we have a region specified, connect to its endpoint.
-    if region:
-        try:
-            if HAS_LOOSE_VERSION and LooseVersion(boto.Version) >= LooseVersion("2.6.0"):
-                emr = boto.emr.connect_to_region(region,
-                                                 aws_access_key_id=aws_access_key,
-                                                 aws_secret_access_key=aws_secret_key,
-                                                 validate_certs=validate_certs)
-            else:
-                emr = boto.emr.connect_to_region(region,
-                                                 aws_access_key_id=aws_access_key,
-                                                 aws_secret_access_key=aws_secret_key)
-
-        except boto.exception.NoAuthHandlerFound, e:
-            module.fail_json(msg = str(e))
-
-    # Otherwise, no region so we fallback to the old connection method
-    else:
-        try:
-            if HAS_LOOSE_VERSION and LooseVersion(boto.Version) >= LooseVersion("2.6.0"):
-                emr = EmrConnection(aws_access_key, aws_secret_key, validate_certs=validate_certs)
-            else:
-                emr = EmrConnection(aws_access_key, aws_secret_key)
-
-        except boto.exception.NoAuthHandlerFound, e:
-            module.fail_json(msg = str(e))
-
-    return emr
-
-def run_jobflow(module, emr, my_bootstrap_actions, my_instance_groups, stream_steps, hive_steps):
-    """
-    :param module: AnsibleModule object
-    :returns EMR object: The ID of the created job flow
-    """
-
-    _, aws_access_key, aws_secret_key, region = get_ec2_creds(module)
-
-    my_steps = stream_steps + hive_steps
-
-    my_api_params = None
-    if module.params.get('vpc_subnet_id'):
-        my_api_params = {'Instances.Ec2SubnetId': module.params.get('vpc_subnet_id')}
-
-    job_id = emr.run_jobflow(name=module.params.get('cluster_name'),
-                             ec2_keyname=module.params.get('ec2_keyname'),
-                             log_uri='{0}/jobflow_logs_{1}'.format(module.params.get('log_uri'), datetime.now().strftime("%Y%m%d%H%M%S")),
-                             api_params=my_api_params,
-                             ami_version=module.params.get('ami_version'),
-                             job_flow_role=module.params.get('jobflow_role'),
-                             visible_to_all_users=module.params.get('visible_to_all_users'),
-                             enable_debugging=module.params.get('enable_debugging'),
-                             instance_groups=my_instance_groups,
-                             bootstrap_actions=my_bootstrap_actions,
-                             steps=my_steps)
-    return job_id
+        self.job_id = self.conn.run_jobflow(name=self.cluster_name,
+                                            ec2_keyname=self.ec2_keyname,
+                                            log_uri='{0}/jobflow_logs_{1}'.format(self.log_uri, datetime.now().strftime("%Y%m%d%H%M%S")),
+                                            api_params=my_api_params,
+                                            ami_version=self.ami_version,
+                                            job_flow_role=self.jobflow_role,
+                                            visible_to_all_users=self.visible_to_all_users,
+                                            instance_groups=self.jobflow_instance_groups,
+                                            bootstrap_actions=self.jobflow_bootstrap_actions,
+                                            steps=self.jobflow_stream_steps + self.jobflow_hive_steps)
 
 def main():
     module = AnsibleModule(
-        argument_spec        = dict(
-            ec2_keyname          = dict(required=True, aliases = ['keypair']),
-            cluster_name         = dict(required=True),
-            bootstrap_actions    = dict(type='list', default=None),
-            log_uri              = dict(required=True),
-            vpc_subnet_id        = dict(),
-            ami_version          = dict(choices=['1.0', '2.0', 'latest'], default='latest'),
-            jobflow_role         = dict(default=None, aliases = ['iamrole']),
-            visible_to_all_users = dict(default=False),
-            instance_groups      = dict(type='list', default=None),
-            hive_steps           = dict(type='list', default=None)
+        argument_spec=dict(
+            ec2_keyname={'required': True},
+            ec2_secret_key={'default': None,
+                            'aliases': ['aws_secret_key', 'secret_key'],
+                            'no_log': True},
+            ec2_access_key={'default': None,
+                            'aliases': ['aws_access_key', 'access_key']},
+            region={'required': False, 'default': None, 'aliases': ['aws_region', 'ec2_region'], 'choices': AWS_REGIONS},
+            cluster_name={'required': True},
+            bootstrap_actions={'type': 'list', 'default': None},
+            log_uri={'required': True},
+            vpc_subnet_id={'required': False},
+            ami_version={'required': False, 'choices': ['1.0', '2.0', 'latest'], 'default': 'latest'},
+            jobflow_role={'default': None, 'aliases': ['iamrole']},
+            visible_to_all_users={'required': False, 'default': False},
+            instance_groups={'required': True, 'type': 'list', 'default': None},
+            hive_steps={'type': 'list', 'default': None},
         )
     )
 
-    steps = []
-    emr = emr_connect(module)
-    instance_groups = get_instance_groups(module)
-    bootstrap_actions = get_bootstrap_actions(module)
-    stream_steps = get_stream_steps(module)
-    hive_steps = get_hive_steps(module)
-    job_id = run_jobflow(module, emr, bootstrap_actions, instance_groups, stream_steps, hive_steps)
-    module.exit_json(changed=True, jobflow_id=job_id)
+    ec2_url, aws_access_key, aws_secret_key, region = get_ec2_creds(module)
+
+    ec2_keyname = module.params['ec2_keyname']
+    cluster_name = module.params['cluster_name']
+    bootstrap_actions = module.params['bootstrap_actions']
+    log_uri = module.params['log_uri']
+    vpc_subnet_id = module.params['vpc_subnet_id']
+    ami_version = module.params['ami_version']
+    jobflow_role = module.params['jobflow_role']
+    visible_to_all_users = module.params['visible_to_all_users']
+    instance_groups = module.params['instance_groups']
+    hive_steps = module.params['hive_steps']
+
+    boto.set_stream_logger('boto')
+
+    if not region:
+        module.fail_json(msg=str("Either region or EC2_REGION environment variable must be set."))
+
+    emrm = ElasticMapReduceManager(module, aws_access_key, 
+                                   aws_secret_key, region, 
+                                   ec2_keyname, cluster_name,
+                                   bootstrap_actions, log_uri, 
+                                   vpc_subnet_id, ami_version,
+                                   jobflow_role, 
+                                   visible_to_all_users, 
+                                   instance_groups, hive_steps)
+
+    # emrm.run_jobflow()
+    facts_result = dict(changed=emrm.changed,
+                        elasticmapreduce=emrm.get_info())
+
+    module.exit_json(**facts_result)
 
 # import module snippets
 from ansible.module_utils.basic import *
