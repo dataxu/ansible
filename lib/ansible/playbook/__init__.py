@@ -350,10 +350,10 @@ class PlayBook(object):
 
     # *****************************************************
 
-    def _async_poll(self, poller, async_seconds, async_poll_interval):
+    def _async_poll(self, poller, async_seconds, async_max_conseq_retries, async_poll_interval):
         ''' launch an async job, if poll_interval is set, wait for completion '''
 
-        results = poller.wait(async_seconds, async_poll_interval)
+        results = poller.wait(async_seconds, async_max_conseq_retries, async_poll_interval)
 
         # mark any hosts that are still listed as started as failed
         # since these likely got killed by async_wrapper
@@ -429,7 +429,7 @@ class PlayBook(object):
             self.stats.compute(results)
             if task.async_poll_interval > 0:
                 # if not polling, playbook requested fire and forget, so don't poll
-                results = self._async_poll(poller, task.async_seconds, task.async_poll_interval)
+                results = self._async_poll(poller, task.async_seconds, task.async_max_conseq_retries, task.async_poll_interval)
             else:
                 for (host, res) in results.get('contacted', {}).iteritems():
                     self.runner_callbacks.on_async_ok(host, res, poller.runner.vars_cache[host]['ansible_job_id'])
