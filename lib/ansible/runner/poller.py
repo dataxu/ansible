@@ -26,13 +26,15 @@ class AsyncPoller(object):
     def __init__(self, results, runner):
         self.runner = runner
 
+        self.hosts_to_retry = {}
+
         self.results = { 'contacted': {}, 'dark': {}}
         self.hosts_to_poll = []
         self.completed = False
 
         # flag to determine if at least one host was contacted
         self.active = False
-        # True to work with & below
+        # True to work with the `and` below
         skipped = True
         jid = None
         for (host, res) in results['contacted'].iteritems():
@@ -42,7 +44,8 @@ class AsyncPoller(object):
                 self.runner.vars_cache[host]['ansible_job_id'] = jid
                 self.active = True
             else:
-                skipped = skipped & res.get('skipped', False)
+                skipped = skipped and res.get('skipped', False)
+                self.runner.vars_cache[host]['ansible_job_id'] = ''
                 self.results['contacted'][host] = res
         for (host, res) in results['dark'].iteritems():
             self.runner.vars_cache[host]['ansible_job_id'] = ''
@@ -71,6 +74,7 @@ class AsyncPoller(object):
         hosts = []
         poll_results = { 'contacted': {}, 'dark': {}, 'polled': {}}
         for (host, res) in results['contacted'].iteritems():
+            self.hosts_to_retry[host] = 0
             if res.get('started',False):
                 hosts.append(host)
                 poll_results['polled'][host] = res
@@ -82,10 +86,17 @@ class AsyncPoller(object):
                 else:
                     self.runner.callbacks.on_async_ok(host, res, self.runner.vars_cache[host]['ansible_job_id'])
         for (host, res) in results['dark'].iteritems():
-            self.results['dark'][host] = res
-            poll_results['dark'][host] = res
-            if host in self.hosts_to_poll:
-                self.runner.callbacks.on_async_failed(host, res, self.runner.vars_cache[host].get('ansible_job_id','XX'))
+            self.hosts_to_retry[host] += 1
+            if self.hosts_to_retry[host] > self.max_retries:
+                self.results['dark'][host] = res
+                poll_results['dark'][host] = res
+                if host in self.hosts_to_poll:
+                    self.runner.callbacks.on_async_failed(host, res, self.runner.vars_cache[host].get('ansible_job_id','XX'))
+
+        if len(hosts)==0:
+            for dark_host in self.hosts_to_retry:
+                if 0 < self.hosts_to_retry[dark_host] <= self.max_retries:
+                    hosts.append(dark_host)
 
         self.hosts_to_poll = hosts
         if len(hosts)==0:
@@ -93,12 +104,13 @@ class AsyncPoller(object):
 
         return poll_results
 
-    def wait(self, seconds, poll_interval):
+    def wait(self, seconds, max_retries, poll_interval):
         """ Wait a certain time for job completion, check status every poll_interval. """
         # jid is None when all hosts were skipped
         if not self.active:
             return self.results
 
+        self.max_retries = max_retries
         clock = seconds - poll_interval
         while (clock >= 0 and not self.completed):
             time.sleep(poll_interval)

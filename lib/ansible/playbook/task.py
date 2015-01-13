@@ -25,7 +25,7 @@ import sys
 class Task(object):
 
     __slots__ = [
-        'name', 'meta', 'action', 'when', 'async_seconds', 'async_poll_interval',
+        'name', 'meta', 'action', 'when', 'async_seconds', 'async_poll_interval', 'async_max_conseq_retries',
         'notify', 'module_name', 'module_args', 'module_vars', 'default_vars',
         'play', 'notified_by', 'tags', 'register', 'role_name',
         'delegate_to', 'first_available_file', 'ignore_errors',
@@ -37,7 +37,7 @@ class Task(object):
 
     # to prevent typos and such
     VALID_KEYS = [
-         'name', 'meta', 'action', 'when', 'async', 'poll', 'notify',
+         'name', 'meta', 'action', 'when', 'async', 'retry', 'poll', 'notify',
          'first_available_file', 'include', 'tags', 'register', 'ignore_errors',
          'delegate_to', 'local_action', 'transport', 'remote_user', 'sudo', 'sudo_user',
          'sudo_pass', 'when', 'connection', 'environment', 'args',
@@ -215,6 +215,9 @@ class Task(object):
         self.async_seconds = ds.get('async', 0)  # not async by default
         self.async_seconds = template.template_from_string(play.basedir, self.async_seconds, all_vars)
         self.async_seconds = int(self.async_seconds)
+        self.async_max_conseq_retries = ds.get('retry', 0)  # no retries by default
+        self.async_max_conseq_retries = template.template_from_string(play.basedir, self.async_max_conseq_retries, all_vars)
+        self.async_max_conseq_retries = int(self.async_max_conseq_retries)
         self.async_poll_interval = ds.get('poll', 10)  # default poll = 10 seconds
         self.async_poll_interval = template.template_from_string(play.basedir, self.async_poll_interval, all_vars)
         self.async_poll_interval = int(self.async_poll_interval)
