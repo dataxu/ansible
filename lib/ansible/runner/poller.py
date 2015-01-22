@@ -86,7 +86,7 @@ class AsyncPoller(object):
                 else:
                     self.runner.callbacks.on_async_ok(host, res, self.runner.vars_cache[host]['ansible_job_id'])
         for (host, res) in results['dark'].iteritems():
-            self.hosts_to_retry[host] = self.hosts_to_retry[host] + 1 if self.hosts_to_retry.has_key(host) else 1 
+            self.hosts_to_retry[host] = self.hosts_to_retry[host] + 1 if host in self.hosts_to_retry else 1 
             if self.hosts_to_retry[host] > self.max_retries:
                 self.results['dark'][host] = res
                 poll_results['dark'][host] = res
