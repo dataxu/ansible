@@ -520,7 +520,7 @@ def replace(connection, module):
         instances = replace_instances
     for i in get_chunks(instances, batch_size):
         if i[0] != instances[0]:
-            time.sleep(replace_batch_wait)
+            time.sleep(batch_wait_time)
         terminate_batch(connection, module, i)
         wait_for_new_instances(module, connection, group_name, wait_timeout, as_group.min_size, 'viable_instances')
         wait_for_elb(connection, module, group_name)
