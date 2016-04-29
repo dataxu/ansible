@@ -34,7 +34,7 @@ setup(name='ansible',
       author_email='michael@ansible.com',
       url='http://ansible.com/',
       license='GPLv3',
-      install_requires=['paramiko', 'jinja2', "PyYAML", 'setuptools', 'pycrypto >= 2.6'],
+      install_requires=['paramiko < 2.0.0', 'jinja2', "PyYAML", 'setuptools', 'pycrypto >= 2.6'],
       package_dir={ 'ansible': 'lib/ansible' },
       packages=[
          'ansible',
