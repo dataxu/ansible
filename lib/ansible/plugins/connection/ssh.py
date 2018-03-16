@@ -65,7 +65,7 @@ class Connection(ConnectionBase):
     # management here.
 
     def _connect(self):
-        self._connected = False
+        _connected = False
         return self
 
     @staticmethod
