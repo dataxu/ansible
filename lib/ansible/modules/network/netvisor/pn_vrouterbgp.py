@@ -18,7 +18,7 @@
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
                     'supported_by': 'community'}
 
@@ -144,6 +144,8 @@ EXAMPLES = """
 RETURN = """
 command:
   description: The CLI command run on the target node(s).
+  returned: always
+  type: str
 stdout:
   description: The set of responses from the vrouterbpg command.
   returned: always
@@ -159,6 +161,9 @@ changed:
 """
 
 import shlex
+
+# Ansible boiler-plate
+from ansible.module_utils.basic import AnsibleModule
 
 VROUTER_EXISTS = None
 NEIGHBOR_EXISTS = None
@@ -331,7 +336,7 @@ def main():
     )
 
     # Accessing the arguments
-    state= module.params['state']
+    state = module.params['state']
     vrouter_name = module.params['pn_vrouter_name']
     neighbor = module.params['pn_neighbor']
     remote_as = module.params['pn_remote_as']
@@ -465,8 +470,7 @@ def main():
             cli += ' route-map-out ' + route_mapout
 
     run_cli(module, cli)
-# Ansible boiler-plate
-from ansible.module_utils.basic import AnsibleModule
+
 
 if __name__ == '__main__':
     main()

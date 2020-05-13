@@ -1,23 +1,13 @@
 #!/usr/bin/python
 #
 # Copyright 2016 Red Hat | Ansible
-#
-# This file is part of Ansible
-#
-# Ansible is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Ansible is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+from __future__ import absolute_import, division, print_function
+__metaclass__ = type
+
+
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
                     'supported_by': 'community'}
 
@@ -45,17 +35,14 @@ options:
         - Path to a directory containing a docker-compose.yml or docker-compose.yaml file.
         - Mutually exclusive with C(definition).
         - Required when no C(definition) is provided.
-      required: false
   project_name:
       description:
         - Provide a project name. If not provided, the project name is taken from the basename of C(project_src).
-        - Required when no C(definition) is provided.
-      required: false
+        - Required when C(definition) is provided.
   files:
       description:
         - List of file names relative to C(project_src). Overrides docker-compose.yml or docker-compose.yaml.
         - Files are loaded and merged in the order given.
-      required: false
   state:
       description:
         - Desired state of the project.
@@ -65,33 +52,27 @@ options:
         - absent
         - present
       default: present
-      required: false
   services:
       description:
         - When C(state) is I(present) run I(docker-compose up) on a subset of services.
-      required: false
   scale:
       description:
         - When C(state) is I(present) scale services. Provide a dictionary of key/value pairs where the key
           is the name of the service and the value is an integer count for the number of containers.
-      required: false
   dependencies:
       description:
         - When C(state) is I(present) specify whether or not to include linked services.
       type: bool
-      required: false
-      default: true
+      default: 'yes'
   definition:
       description:
         - Provide docker-compose yaml describing one or more services, networks and volumes.
         - Mutually exclusive with C(project_src) and C(files).
-      required: false
   hostname_check:
       description:
         - Whether or not to check the Docker daemon's hostname against the name provided in the client certificate.
       type: bool
-      required: false
-      default: false
+      default: 'no'
   recreate:
       description:
         - By default containers will be recreated when their configuration differs from the service definition.
@@ -111,59 +92,66 @@ options:
         - Use the C(nocache) option to ignore the image cache when performing the build.
         - If an existing image is replaced, services using the image will be recreated unless C(recreate) is I(never).
       type: bool
-      required: false
-      default: false
+      default: 'no'
   pull:
       description:
         - Use with state I(present) to always pull images prior to starting the application.
         - Same as running docker-compose pull.
         - When a new image is pulled, services using the image will be recreated unless C(recreate) is I(never).
       type: bool
-      required: false
-      default: false
+      default: 'no'
       version_added: "2.2"
   nocache:
       description:
         - Use with the build option to ignore the cache during the image build process.
       type: bool
-      required: false
-      default: false
+      default: 'no'
       version_added: "2.2"
   remove_images:
       description:
         - Use with state I(absent) to remove the all images or only local images.
-      required: false
-      default: null
+      choices:
+          - 'all'
+          - 'local'
   remove_volumes:
       description:
         - Use with state I(absent) to remove data volumes.
-      required: false
       type: bool
-      default: false
+      default: 'no'
   stopped:
       description:
         - Use with state I(present) to leave the containers in an exited or non-running state.
-      required: false
       type: bool
-      default: false
+      default: 'no'
   restarted:
       description:
         - Use with state I(present) to restart all containers.
-      required: false
       type: bool
-      default: false
-  debug:
+      default: 'no'
+  remove_orphans:
       description:
-        - Include I(actions) in the return values.
-      required: false
+        - Remove containers for services not defined in the compose file.
       type: bool
       default: false
+  timeout:
+    description:
+        - timeout in seconds for container shutdown when attached or when containers are already running.
+    default: 10
 
 extends_documentation_fragment:
     - docker
 
 requirements:
     - "python >= 2.6"
+    - "docker-py >= 1.8.0"
+    - "Please note that the L(docker-py,https://pypi.org/project/docker-py/) Python
+       module has been superseded by L(docker,https://pypi.org/project/docker/)
+       (see L(here,https://github.com/docker/docker-py/issues/1310) for details).
+       For Python 2.6, C(docker-py) must be used. Otherwise, it is recommended to
+       install the C(docker) Python module. Note that both modules should I(not)
+       be installed at the same time. Also note that when both modules are installed
+       and one of them is uninstalled, the other might no longer function and a
+       reinstall of it is required."
     - "docker-compose >= 1.7.0"
     - "Docker API >= 1.20"
     - "PyYAML >= 3.11"
@@ -449,38 +437,37 @@ actions:
                           type: string
 '''
 
-HAS_YAML = True
-HAS_YAML_EXC = None
-HAS_COMPOSE = True
-HAS_COMPOSE_EXC = None
-MINIMUM_COMPOSE_VERSION = '1.7.0'
-
-import sys
+import os
 import re
+import sys
+import tempfile
+from contextlib import contextmanager
+from distutils.version import LooseVersion
 
 try:
     import yaml
+    HAS_YAML = True
+    HAS_YAML_EXC = None
 except ImportError as exc:
     HAS_YAML = False
     HAS_YAML_EXC = str(exc)
 
-from distutils.version import LooseVersion
-from ansible.module_utils.basic import *
-
 try:
     from compose import __version__ as compose_version
-    from compose.project import ProjectError
     from compose.cli.command import project_from_options
-    from compose.service import ConvergenceStrategy, NoSuchImageError
+    from compose.service import NoSuchImageError
     from compose.cli.main import convergence_strategy_from_opts, build_action_from_opts, image_type_from_opt
-    from compose.const import DEFAULT_TIMEOUT
+    from compose.const import DEFAULT_TIMEOUT, LABEL_SERVICE, LABEL_PROJECT, LABEL_ONE_OFF
+    HAS_COMPOSE = True
+    HAS_COMPOSE_EXC = None
+    MINIMUM_COMPOSE_VERSION = '1.7.0'
+
 except ImportError as exc:
     HAS_COMPOSE = False
     HAS_COMPOSE_EXC = str(exc)
     DEFAULT_TIMEOUT = 10
 
-from ansible.module_utils.docker_common import *
-from contextlib import contextmanager
+from ansible.module_utils.docker_common import AnsibleDockerClient, DockerBaseClass
 
 
 AUTH_PARAM_MAPPING = {
@@ -503,20 +490,77 @@ def stdout_redirector(path_name):
     finally:
         sys.stdout = old_stdout
 
-def get_stdout(path_name):
-    full_stdout = ''
-    last_line = ''
+
+@contextmanager
+def stderr_redirector(path_name):
+    old_fh = sys.stderr
+    fd = open(path_name, 'w')
+    sys.stderr = fd
+    try:
+        yield
+    finally:
+        sys.stderr = old_fh
+
+
+def make_redirection_tempfiles():
+    _, out_redir_name = tempfile.mkstemp(prefix="ansible")
+    _, err_redir_name = tempfile.mkstemp(prefix="ansible")
+    return (out_redir_name, err_redir_name)
+
+
+def cleanup_redirection_tempfiles(out_name, err_name):
+    for i in [out_name, err_name]:
+        os.remove(i)
+
+
+def get_redirected_output(path_name):
+    output = []
     with open(path_name, 'r') as fd:
         for line in fd:
             # strip terminal format/color chars
-            new_line = re.sub(r'\x1b\[.+m', '', line.encode('ascii'))
-            full_stdout += new_line
-            if new_line.strip():
-                # Assuming last line contains the error message
-                last_line = new_line.strip().encode('utf-8')
-    fd.close()
+            new_line = re.sub(r'\x1b\[.+m', '', line)
+            output.append(new_line)
     os.remove(path_name)
-    return full_stdout, last_line
+    return output
+
+
+def attempt_extract_errors(exc_str, stdout, stderr):
+    errors = [l.strip() for l in stderr if l.strip().startswith('ERROR:')]
+    errors.extend([l.strip() for l in stdout if l.strip().startswith('ERROR:')])
+
+    warnings = [l.strip() for l in stderr if l.strip().startswith('WARNING:')]
+    warnings.extend([l.strip() for l in stdout if l.strip().startswith('WARNING:')])
+
+    # assume either the exception body (if present) or the last warning was the 'most'
+    # fatal.
+
+    if exc_str.strip():
+        msg = exc_str.strip()
+    elif errors:
+        msg = errors[-1].encode('utf-8')
+    else:
+        msg = 'unknown cause'
+
+    return {
+        'warnings': [w.encode('utf-8') for w in warnings],
+        'errors': [e.encode('utf-8') for e in errors],
+        'msg': msg,
+        'module_stderr': ''.join(stderr),
+        'module_stdout': ''.join(stdout)
+    }
+
+
+def get_failure_info(exc, out_name, err_name=None, msg_format='%s'):
+    if err_name is None:
+        stderr = []
+    else:
+        stderr = get_redirected_output(err_name)
+    stdout = get_redirected_output(out_name)
+
+    reason = attempt_extract_errors(str(exc), stdout, stderr)
+    reason['msg'] = msg_format % reason['msg']
+    return reason
+
 
 class ContainerManager(DockerBaseClass):
 
@@ -565,7 +609,8 @@ class ContainerManager(DockerBaseClass):
             self.options[u'--file'] = self.files
 
         if not HAS_COMPOSE:
-            self.client.fail("Unable to load docker-compose. Try `pip install docker-compose`. Error: %s" % HAS_COMPOSE_EXC)
+            self.client.fail("Unable to load docker-compose. Try `pip install docker-compose`. Error: %s" %
+                             HAS_COMPOSE_EXC)
 
         if LooseVersion(compose_version) < LooseVersion(MINIMUM_COMPOSE_VERSION):
             self.client.fail("Found docker-compose version %s. Minimum required version is %s. "
@@ -639,7 +684,7 @@ class ContainerManager(DockerBaseClass):
 
         up_options = {
             u'--no-recreate': False,
-            u'--build': True,
+            u'--build': False,
             u'--no-build': False,
             u'--no-deps': False,
             u'--force-recreate': False,
@@ -666,6 +711,25 @@ class ContainerManager(DockerBaseClass):
             result['changed'] = build_output['changed']
             result['actions'] += build_output['actions']
 
+        if self.remove_orphans:
+            containers = self.client.containers(
+                filters={
+                    'label': [
+                        '{0}={1}'.format(LABEL_PROJECT, self.project.name),
+                        '{0}={1}'.format(LABEL_ONE_OFF, "False")
+                    ],
+                }
+            )
+
+            orphans = []
+            for container in containers:
+                service_name = container.get('Labels', {}).get(LABEL_SERVICE)
+                if service_name not in self.project.service_names:
+                    orphans.append(service_name)
+
+            if orphans:
+                result['changed'] = True
+
         for service in self.project.services:
             if not service_names or service.name in service_names:
                 plan = service.convergence_plan(strategy=converge)
@@ -682,25 +746,26 @@ class ContainerManager(DockerBaseClass):
                     result['actions'].append(result_action)
 
         if not self.check_mode and result['changed']:
-            _, fd_name = tempfile.mkstemp(prefix="ansible")
+            out_redir_name, err_redir_name = make_redirection_tempfiles()
             try:
-                with stdout_redirector(fd_name):
-                    do_build = build_action_from_opts(up_options)
-                    self.log('Setting do_build to %s' % do_build)
-                    self.project.up(
-                        service_names=service_names,
-                        start_deps=start_deps,
-                        strategy=converge,
-                        do_build=do_build,
-                        detached=detached,
-                        remove_orphans=self.remove_orphans,
-                        timeout=self.timeout)
+                with stdout_redirector(out_redir_name):
+                    with stderr_redirector(err_redir_name):
+                        do_build = build_action_from_opts(up_options)
+                        self.log('Setting do_build to %s' % do_build)
+                        self.project.up(
+                            service_names=service_names,
+                            start_deps=start_deps,
+                            strategy=converge,
+                            do_build=do_build,
+                            detached=detached,
+                            remove_orphans=self.remove_orphans,
+                            timeout=self.timeout)
             except Exception as exc:
-                full_stdout, last_line= get_stdout(fd_name)
-                self.client.module.fail_json(msg="Error starting project %s" % str(exc), module_stderr=last_line,
-                                             module_stdout=full_stdout)
+                fail_reason = get_failure_info(exc, out_redir_name, err_redir_name,
+                                               msg_format="Error starting project %s")
+                self.client.module.fail_json(**fail_reason)
             else:
-                get_stdout(fd_name)
+                cleanup_redirection_tempfiles(out_redir_name, err_redir_name)
 
         if self.stopped:
             stop_output = self.cmd_stop(service_names)
@@ -846,7 +911,7 @@ class ContainerManager(DockerBaseClass):
 
                     # build the image
                     try:
-                        new_image_id = service.build(pull=True, no_cache=self.nocache)
+                        new_image_id = service.build(pull=self.pull, no_cache=self.nocache)
                     except Exception as exc:
                         self.client.fail("Error: build failed with %s" % str(exc))
 
@@ -903,16 +968,17 @@ class ContainerManager(DockerBaseClass):
                     ))
                 result['actions'].append(service_res)
         if not self.check_mode and result['changed']:
-            _, fd_name = tempfile.mkstemp(prefix="ansible")
+            out_redir_name, err_redir_name = make_redirection_tempfiles()
             try:
-                with stdout_redirector(fd_name):
-                    self.project.stop(service_names=service_names, timeout=self.timeout)
+                with stdout_redirector(out_redir_name):
+                    with stderr_redirector(err_redir_name):
+                        self.project.stop(service_names=service_names, timeout=self.timeout)
             except Exception as exc:
-                full_stdout, last_line = get_stdout(fd_name)
-                self.client.module.fail_json(msg="Error stopping project %s" % str(exc), module_stderr=last_line,
-                                             module_stdout=full_stdout)
+                fail_reason = get_failure_info(exc, out_redir_name, err_redir_name,
+                                               msg_format="Error stopping project %s")
+                self.client.module.fail_json(**fail_reason)
             else:
-                get_stdout(fd_name)
+                cleanup_redirection_tempfiles(out_redir_name, err_redir_name)
         return result
 
     def cmd_restart(self, service_names):
@@ -937,16 +1003,17 @@ class ContainerManager(DockerBaseClass):
                 result['actions'].append(service_res)
 
         if not self.check_mode and result['changed']:
-            _, fd_name = tempfile.mkstemp(prefix="ansible")
+            out_redir_name, err_redir_name = make_redirection_tempfiles()
             try:
-                with stdout_redirector(fd_name):
-                    self.project.restart(service_names=service_names, timeout=self.timeout)
+                with stdout_redirector(out_redir_name):
+                    with stderr_redirector(err_redir_name):
+                        self.project.restart(service_names=service_names, timeout=self.timeout)
             except Exception as exc:
-                full_stdout, last_line = get_stdout(fd_name)
-                self.client.module.fail_json(msg="Error restarting project %s" % str(exc), module_stderr=last_line,
-                                             module_stdout=full_stdout)
+                fail_reason = get_failure_info(exc, out_redir_name, err_redir_name,
+                                               msg_format="Error restarting project %s")
+                self.client.module.fail_json(**fail_reason)
             else:
-                get_stdout(fd_name)
+                cleanup_redirection_tempfiles(out_redir_name, err_redir_name)
         return result
 
     def cmd_scale(self):
@@ -961,27 +1028,35 @@ class ContainerManager(DockerBaseClass):
                     scale=0
                 )
                 containers = service.containers(stopped=True)
-                if len(containers) != self.scale[service.name]:
+                scale = self.parse_scale(service.name)
+                if len(containers) != scale:
                     result['changed'] = True
-                    service_res['scale'] = self.scale[service.name] - len(containers)
+                    service_res['scale'] = scale - len(containers)
                     if not self.check_mode:
                         try:
-                            service.scale(int(self.scale[service.name]))
+                            service.scale(scale)
                         except Exception as exc:
                             self.client.fail("Error scaling %s - %s" % (service.name, str(exc)))
                     result['actions'].append(service_res)
         return result
+
+    def parse_scale(self, service_name):
+        try:
+            return int(self.scale[service_name])
+        except ValueError:
+            self.client.fail("Error scaling %s - expected int, got %s",
+                             service_name, str(type(self.scale[service_name])))
 
 
 def main():
     argument_spec = dict(
         project_src=dict(type='path'),
         project_name=dict(type='str',),
-        files=dict(type='list'),
+        files=dict(type='list', elements='path'),
         state=dict(type='str', choices=['absent', 'present'], default='present'),
         definition=dict(type='dict'),
         hostname_check=dict(type='bool', default=False),
-        recreate=dict(type='str', choices=['always','never','smart'], default='smart'),
+        recreate=dict(type='str', choices=['always', 'never', 'smart'], default='smart'),
         build=dict(type='bool', default=False),
         remove_images=dict(type='str', choices=['all', 'local']),
         remove_volumes=dict(type='bool', default=False),
@@ -989,7 +1064,7 @@ def main():
         stopped=dict(type='bool', default=False),
         restarted=dict(type='bool', default=False),
         scale=dict(type='dict'),
-        services=dict(type='list'),
+        services=dict(type='list', elements='str'),
         dependencies=dict(type='bool', default=True),
         pull=dict(type='bool', default=False),
         nocache=dict(type='bool', default=False),
@@ -1005,7 +1080,8 @@ def main():
     client = AnsibleDockerClient(
         argument_spec=argument_spec,
         mutually_exclusive=mutually_exclusive,
-        supports_check_mode=True
+        supports_check_mode=True,
+        min_docker_api_version='1.20',
     )
 
     result = ContainerManager(client).exec_module()

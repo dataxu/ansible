@@ -18,7 +18,7 @@
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
                     'supported_by': 'community'}
 
@@ -98,6 +98,8 @@ EXAMPLES = """
 RETURN = """
 command:
   description: The CLI command run on the target node(s).
+  returned: always
+  type: str
 stdout:
   description: The set of responses from the ospf command.
   returned: always
@@ -113,6 +115,9 @@ changed:
 """
 
 import shlex
+
+# AnsibleModule boilerplate
+from ansible.module_utils.basic import AnsibleModule
 
 
 def get_command_from_state(state):
@@ -138,8 +143,8 @@ def main():
             pn_cliusername=dict(required=True, type='str'),
             pn_clipassword=dict(required=True, type='str', no_log=True),
             pn_cliswitch=dict(required=False, type='str'),
-            state =dict(required=True, type='str',
-                        choices=['present', 'absent', 'update']),
+            state=dict(required=True, type='str',
+                       choices=['present', 'absent', 'update']),
             pn_vrouter_name=dict(required=True, type='str'),
             pn_ospf_area=dict(required=True, type='str'),
             pn_stub_type=dict(type='str', choices=['none', 'stub', 'nssa',
@@ -212,8 +217,6 @@ def main():
             changed=True
         )
 
-# AnsibleModule boilerplate
-from ansible.module_utils.basic import AnsibleModule
 
 if __name__ == '__main__':
     main()

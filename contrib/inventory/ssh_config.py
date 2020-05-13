@@ -45,10 +45,7 @@ import os.path
 import sys
 from collections import MutableSequence
 
-try:
-    import json
-except ImportError:
-    import simplejson as json
+import json
 
 import paramiko
 
@@ -58,9 +55,9 @@ SSH_CONF = '~/.ssh/config'
 _key = 'ssh_config'
 
 _ssh_to_ansible = [('user', 'ansible_ssh_user'),
-                  ('hostname', 'ansible_ssh_host'),
-                  ('identityfile', 'ansible_ssh_private_key_file'),
-                  ('port', 'ansible_ssh_port')]
+                   ('hostname', 'ansible_ssh_host'),
+                   ('identityfile', 'ansible_ssh_private_key_file'),
+                   ('port', 'ansible_ssh_port')]
 
 
 def get_config():

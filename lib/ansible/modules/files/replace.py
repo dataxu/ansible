@@ -1,29 +1,19 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 
-# (c) 2013, Evan Kaufman <evan@digitalflophouse.com
-#
-# This file is part of Ansible
-#
-# Ansible is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Ansible is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
+# Copyright: (c) 2013, Evan Kaufman <evan@digitalflophouse.com
+# Copyright: (c) 2017, Ansible Project
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+from __future__ import absolute_import, division, print_function
+__metaclass__ = type
+
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['stableinterface'],
                     'supported_by': 'community'}
 
 
-DOCUMENTATION = """
+DOCUMENTATION = r'''
 ---
 module: replace
 author: "Evan Kaufman (@EvanK)"
@@ -39,122 +29,142 @@ description:
 version_added: "1.6"
 options:
   path:
-    required: true
-    aliases: [ dest, destfile, name ]
     description:
       - The file to modify.
       - Before 2.3 this option was only usable as I(dest), I(destfile) and I(name).
-  regexp:
+    type: path
     required: true
+    aliases: [ dest, destfile, name ]
+  regexp:
     description:
       - The regular expression to look for in the contents of the file.
         Uses Python regular expressions; see
         U(http://docs.python.org/2/library/re.html).
-        Uses multiline mode, which means C(^) and C($) match the beginning
-        and end respectively of I(each line) of the file.
+        Uses MULTILINE mode, which means C(^) and C($) match the beginning
+        and end of the file, as well as the beginning and end respectively
+        of I(each line) of the file.
+      - Does not use DOTALL, which means the C(.) special character matches
+        any character I(except newlines). A common mistake is to assume that
+        a negated character set like C([^#]) will also not match newlines.
+        In order to exclude newlines, they must be added to the set like C([^#\\n]).
       - Note that, as of ansible 2, short form tasks should have any escape
         sequences backslash-escaped in order to prevent them being parsed
         as string literal escapes. See the examples.
-
+    required: true
   replace:
-    required: false
     description:
       - The string to replace regexp matches. May contain backreferences
         that will get expanded with the regexp capture groups if the regexp
         matches. If not set, matches are removed entirely.
+      - Backreferences can be used ambiguously like C(\1), or explicitly like C(\g<1>).
+    type: str
   after:
-    required: false
-    version_added: "2.4"
     description:
-      - If specified, the line after the replace/remove will start. Can be used
-        in combination with C(before).
-        Uses Python regular expressions; see
+      - If specified, only content after this match will be replaced/removed.
+      - Can be used in combination with C(before).
+      - Uses Python regular expressions; see
         U(http://docs.python.org/2/library/re.html).
+      - Uses DOTALL, which means the C(.) special character I(can match newlines).
+    type: str
+    version_added: "2.4"
   before:
-    required: false
-    version_added: "2.4"
     description:
-      - If specified, the line before the replace/remove will occur. Can be used
-        in combination with C(after).
-        Uses Python regular expressions; see
+      - If specified, only content before this match will be replaced/removed.
+      - Can be used in combination with C(after).
+      - Uses Python regular expressions; see
         U(http://docs.python.org/2/library/re.html).
+      - Uses DOTALL, which means the C(.) special character I(can match newlines).
+    type: str
+    version_added: "2.4"
   backup:
-    required: false
-    default: "no"
-    choices: [ "yes", "no" ]
     description:
       - Create a backup file including the timestamp information so you can
         get the original file back if you somehow clobbered it incorrectly.
+    type: bool
+    default: 'no'
   others:
     description:
       - All arguments accepted by the M(file) module also work here.
-    required: false
-  follow:
-    required: false
-    default: "no"
-    choices: [ "yes", "no" ]
-    version_added: "1.9"
+  encoding:
     description:
-      - 'This flag indicates that filesystem links, if they exist, should be followed.'
+      - "The character encoding for reading and writing the file."
+    default: "utf-8"
+    version_added: "2.4"
 notes:
   - As of Ansible 2.3, the I(dest) option has been changed to I(path) as default, but I(dest) still works as well.
-"""
+  - As of Ansible 2.7.10, the combined use of I(before) and I(after) works properly. If you were relying on the
+    previous incorrect behavior, you may be need to adjust your tasks.
+    See U(https://github.com/ansible/ansible/issues/31354) for details.
+  - Option I(follow) has been removed in version 2.5, because this module modifies the contents of the file so I(follow=no) doesn't make sense.
+'''
 
-EXAMPLES = r"""
-# Before 2.3, option 'dest', 'destfile' or 'name' was used instead of 'path'
-- replace:
+EXAMPLES = r'''
+- name: Before Ansible 2.3, option 'dest', 'destfile' or 'name' was used instead of 'path'
+  replace:
     path: /etc/hosts
     regexp: '(\s+)old\.host\.name(\s+.*)?$'
     replace: '\1new.host.name\2'
-    backup: yes
 
-# Replace after the expression till the end of the file (requires >=2.4)
-- replace:
-    path: /etc/hosts
-    regexp: '(\s+)old\.host\.name(\s+.*)?$'
-    replace: '\1new.host.name\2'
-    after: 'Start after line.*'
-    backup: yes
+- name: Replace after the expression till the end of the file (requires Ansible >= 2.4)
+  replace:
+    path: /etc/apache2/sites-available/default.conf
+    after: 'NameVirtualHost [*]'
+    regexp: '^(.+)$'
+    replace: '# \1'
 
-# Replace before the expression till the begin of the file (requires >=2.4)
-- replace:
-    path: /etc/hosts
-    regexp: '(\s+)old\.host\.name(\s+.*)?$'
-    replace: '\1new.host.name\2'
-    before: 'Start before line.*'
-    backup: yes
+- name: Replace before the expression till the begin of the file (requires Ansible >= 2.4)
+  replace:
+    path: /etc/apache2/sites-available/default.conf
+    before: '# live site config'
+    regexp: '^(.+)$'
+    replace: '# \1'
 
+# Prior to Ansible 2.7.10, using before and after in combination did the opposite of what was intended.
+# see https://github.com/ansible/ansible/issues/31354 for details.
 # Replace between the expressions (requires >=2.4)
 - replace:
     path: /etc/hosts
-    regexp: '(\s+)old\.host\.name(\s+.*)?$'
-    replace: '\1new.host.name\2'
-    after: 'Start after line.*'
-    before: 'Start before line.*'
-    backup: yes
+    after: '<VirtualHost [*]>'
+    before: '</VirtualHost>'
+    regexp: '^(.+)$'
+    replace: '# \1'
 
-- replace:
+- name: Supports common file attributes
+  replace:
     path: /home/jdoe/.ssh/known_hosts
     regexp: '^old\.host\.name[^\n]*\n'
     owner: jdoe
     group: jdoe
     mode: 0644
 
-- replace:
+- name: Supports a validate command
+  replace:
     path: /etc/apache/ports
     regexp: '^(NameVirtualHost|Listen)\s+80\s*$'
     replace: '\1 127.0.0.1:8080'
     validate: '/usr/sbin/apache2ctl -f %s -t'
 
-- name: short form task (in ansible 2+) necessitates backslash-escaped sequences
-  replace: dest=/etc/hosts regexp='\\b(localhost)(\\d*)\\b' replace='\\1\\2.localdomain\\2 \\1\\2'
+- name: Short form task (in ansible 2+) necessitates backslash-escaped sequences
+  replace: path=/etc/hosts regexp='\\b(localhost)(\\d*)\\b' replace='\\1\\2.localdomain\\2 \\1\\2'
 
 - name: long form task does not
   replace:
-    dest: /etc/hosts
+    path: /etc/hosts
     regexp: '\b(localhost)(\d*)\b'
     replace: '\1\2.localdomain\2 \1\2'
-"""
+
+- name: Explicitly specifying positional matched groups in replacement
+  replace:
+    path: /etc/ssh/sshd_config
+    regexp: '^(ListenAddress[ ]+)[^\n]+$'
+    replace: '\g<1>0.0.0.0'
+
+- name: Explicitly specifying named matched groups
+  replace:
+    path: /etc/ssh/sshd_config
+    regexp: '^(?P<dctv>ListenAddress[ ]+)(?P<host>[^\n]+)$'
+    replace: '#\g<dctv>\g<host>\n\g<dctv>0.0.0.0'
+'''
 
 import os
 import re
@@ -166,9 +176,9 @@ from ansible.module_utils.basic import AnsibleModule
 
 def write_changes(module, contents, path):
 
-    tmpfd, tmpfile = tempfile.mkstemp()
-    f = os.fdopen(tmpfd,'wb')
-    f.write(to_bytes(contents))
+    tmpfd, tmpfile = tempfile.mkstemp(dir=module.tmpdir)
+    f = os.fdopen(tmpfd, 'wb')
+    f.write(contents)
     f.close()
 
     validate = module.params.get('validate', None)
@@ -180,7 +190,7 @@ def write_changes(module, contents, path):
         valid = rc == 0
         if rc != 0:
             module.fail_json(msg='failed to validate: '
-                                 'rc:%s error:%s' % (rc,err))
+                                 'rc:%s error:%s' % (rc, err))
     if valid:
         module.atomic_move(tmpfile, path, unsafe_writes=module.params['unsafe_writes'])
 
@@ -208,6 +218,7 @@ def main():
             before=dict(required=False),
             backup=dict(default=False, type='bool'),
             validate=dict(default=None, type='str'),
+            encoding=dict(default='utf-8', type='str'),
         ),
         add_file_common_args=True,
         supports_check_mode=True
@@ -215,7 +226,13 @@ def main():
 
     params = module.params
     path = params['path']
+    encoding = params['encoding']
     res_args = dict()
+
+    params['after'] = to_text(params['after'], errors='surrogate_or_strict', nonstring='passthru')
+    params['before'] = to_text(params['before'], errors='surrogate_or_strict', nonstring='passthru')
+    params['regexp'] = to_text(params['regexp'], errors='surrogate_or_strict', nonstring='passthru')
+    params['replace'] = to_text(params['replace'], errors='surrogate_or_strict', nonstring='passthru')
 
     if os.path.isdir(path):
         module.fail_json(rc=256, msg='Path %s is a directory !' % path)
@@ -224,33 +241,36 @@ def main():
         module.fail_json(rc=257, msg='Path %s does not exist !' % path)
     else:
         f = open(path, 'rb')
-        contents = to_text(f.read(), errors='surrogate_or_strict')
+        contents = to_text(f.read(), errors='surrogate_or_strict', encoding=encoding)
         f.close()
 
-    pattern = ''
-    if params['after']:
-        pattern = '%s(.*)' % params['after']
+    pattern = u''
+    if params['after'] and params['before']:
+        pattern = u'%s(?P<subsection>.*?)%s' % (params['after'], params['before'])
+    elif params['after']:
+        pattern = u'%s(?P<subsection>.*)' % params['after']
     elif params['before']:
-        pattern = '(.*)%s' % params['before']
-    elif params['after'] and params['before']:
-        pattern = '%s(.*?)%s' % (params['before'], params['after'])
+        pattern = u'(?P<subsection>.*)%s' % params['before']
 
     if pattern:
         section_re = re.compile(pattern, re.DOTALL)
         match = re.search(section_re, contents)
         if match:
-            section = match.group(0)
-
-        mre = re.compile(params['regexp'], re.MULTILINE)
-        result = re.subn(mre, params['replace'], section, 0)
-        if result[1] > 0 and section != result[0]:
-            result = (contents.replace(section, result[0]), result[1])
-
+            section = match.group('subsection')
+            indices = [match.start('subsection'), match.end('subsection')]
+        else:
+            res_args['msg'] = 'Pattern for before/after params did not match the given file: %s' % pattern
+            res_args['changed'] = False
+            module.exit_json(**res_args)
     else:
-        mre = re.compile(params['regexp'], re.MULTILINE)
-        result = re.subn(mre, params['replace'], contents, 0)
+        section = contents
 
-    if result[1] > 0 and contents != result[0]:
+    mre = re.compile(params['regexp'], re.MULTILINE)
+    result = re.subn(mre, params['replace'], section, 0)
+
+    if result[1] > 0 and section != result[0]:
+        if pattern:
+            result = (contents[:indices[0]] + result[0] + contents[indices[1]:], result[1])
         msg = '%s replacements made' % result[1]
         changed = True
         if module._diff:
@@ -267,9 +287,9 @@ def main():
     if changed and not module.check_mode:
         if params['backup'] and os.path.exists(path):
             res_args['backup_file'] = module.backup_local(path)
-        if params['follow'] and os.path.islink(path):
-            path = os.path.realpath(path)
-        write_changes(module, result[0], path)
+        # We should always follow symlinks so that we change the real file
+        path = os.path.realpath(path)
+        write_changes(module, to_bytes(result[0], encoding=encoding), path)
 
     res_args['msg'], res_args['changed'] = check_file_attrs(module, changed, msg)
     module.exit_json(**res_args)

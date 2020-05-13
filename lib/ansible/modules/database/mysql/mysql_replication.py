@@ -1,28 +1,16 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
 
-"""
+# (c) 2013, Balazs Pocze <banyek@gawker.com>
+# Certain parts are taken from Mark Theunissen's mysqldb module
+#
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
-Ansible module to manage mysql replication
-(c) 2013, Balazs Pocze <banyek@gawker.com>
-Certain parts are taken from Mark Theunissen's mysqldb module
+from __future__ import absolute_import, division, print_function
+__metaclass__ = type
 
-This file is part of Ansible
 
-Ansible is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
-
-Ansible is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
-You should have received a copy of the GNU General Public License
-along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
-"""
-
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
                     'supported_by': 'community'}
 
@@ -41,7 +29,6 @@ options:
         description:
             - module operating mode. Could be getslave (SHOW SLAVE STATUS), getmaster (SHOW MASTER STATUS), changemaster (CHANGE MASTER TO), startslave
               (START SLAVE), stopslave (STOP SLAVE), resetslave (RESET SLAVE), resetslaveall (RESET SLAVE ALL)
-        required: False
         choices:
             - getslave
             - getmaster
@@ -100,8 +87,6 @@ options:
     master_auto_position:
         description:
             - does the host uses GTID based replication or not
-        required: false
-        default: null
         version_added: "2.0"
 
 extends_documentation_fragment: mysql
@@ -133,16 +118,9 @@ EXAMPLES = '''
 import os
 import warnings
 
-try:
-    import MySQLdb
-except ImportError:
-    mysqldb_found = False
-else:
-    mysqldb_found = True
-
 from ansible.module_utils.basic import AnsibleModule
-from ansible.module_utils.mysql import mysql_connect
-from ansible.module_utils.pycompat24 import get_exception
+from ansible.module_utils.mysql import mysql_connect, mysql_driver, mysql_driver_fail_msg
+from ansible.module_utils._text import to_native
 
 
 def get_master_status(cursor):
@@ -201,7 +179,7 @@ def changemaster(cursor, chm, chm_params):
 
 def main():
     module = AnsibleModule(
-        argument_spec = dict(
+        argument_spec=dict(
             login_user=dict(default=None),
             login_password=dict(default=None, no_log=True),
             login_host=dict(default="localhost"),
@@ -254,24 +232,23 @@ def main():
     connect_timeout = module.params['connect_timeout']
     config_file = module.params['config_file']
 
-    if not mysqldb_found:
-        module.fail_json(msg="the python mysqldb module is required")
+    if mysql_driver is None:
+        module.fail_json(msg=mysql_driver_fail_msg)
     else:
-        warnings.filterwarnings('error', category=MySQLdb.Warning)
+        warnings.filterwarnings('error', category=mysql_driver.Warning)
 
     login_password = module.params["login_password"]
     login_user = module.params["login_user"]
 
     try:
-        cursor = mysql_connect(module, login_user, login_password, config_file, ssl_cert, ssl_key, ssl_ca, None, 'MySQLdb.cursors.DictCursor',
+        cursor = mysql_connect(module, login_user, login_password, config_file, ssl_cert, ssl_key, ssl_ca, None, 'mysql_driver.cursors.DictCursor',
                                connect_timeout=connect_timeout)
-    except Exception:
-        e = get_exception()
+    except Exception as e:
         if os.path.exists(config_file):
             module.fail_json(msg="unable to connect to database, check login_user and login_password are correct or %s has the credentials. "
-                                 "Exception message: %s" % (config_file, e))
+                                 "Exception message: %s" % (config_file, to_native(e)))
         else:
-            module.fail_json(msg="unable to find %s. Exception message: %s" % (config_file, e))
+            module.fail_json(msg="unable to find %s. Exception message: %s" % (config_file, to_native(e)))
 
     if mode in "getmaster":
         status = get_master_status(cursor)
@@ -290,7 +267,7 @@ def main():
         module.exit_json(**status)
 
     elif mode in "changemaster":
-        chm=[]
+        chm = []
         chm_params = {}
         result = {}
         if master_host:
@@ -341,13 +318,11 @@ def main():
             chm.append("MASTER_AUTO_POSITION = 1")
         try:
             changemaster(cursor, chm, chm_params)
-        except MySQLdb.Warning:
-            e = get_exception()
-            result['warning'] = str(e)
-        except Exception:
-            e = get_exception()
-            module.fail_json(msg='%s. Query == CHANGE MASTER TO %s' % (e, chm))
-        result['changed']=True
+        except mysql_driver.Warning as e:
+            result['warning'] = to_native(e)
+        except Exception as e:
+            module.fail_json(msg='%s. Query == CHANGE MASTER TO %s' % (to_native(e), chm))
+        result['changed'] = True
         module.exit_json(**result)
     elif mode in "startslave":
         started = start_slave(cursor)
@@ -374,7 +349,8 @@ def main():
         else:
             module.exit_json(msg="Slave already reset", changed=False)
 
+    warnings.simplefilter("ignore")
+
 
 if __name__ == '__main__':
     main()
-    warnings.simplefilter("ignore")

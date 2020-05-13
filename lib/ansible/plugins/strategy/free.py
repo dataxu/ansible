@@ -14,8 +14,11 @@
 #
 # You should have received a copy of the GNU General Public License
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
-'''
-DOCUMENTATION:
+# Make coding more python3-ish
+from __future__ import (absolute_import, division, print_function)
+__metaclass__ = type
+
+DOCUMENTATION = '''
     strategy: free
     short_description: Executes tasks on each host independently
     description:
@@ -25,16 +28,13 @@ DOCUMENTATION:
     version_added: "2.0"
     author: Ansible Core Team
 '''
-# Make coding more python3-ish
-from __future__ import (absolute_import, division, print_function)
-__metaclass__ = type
 
 import time
 
 from ansible import constants as C
 from ansible.errors import AnsibleError
 from ansible.playbook.included_file import IncludedFile
-from ansible.plugins import action_loader
+from ansible.plugins.loader import action_loader
 from ansible.plugins.strategy import StrategyBase
 from ansible.template import Templar
 from ansible.module_utils._text import to_text
@@ -48,6 +48,19 @@ except ImportError:
 
 
 class StrategyModule(StrategyBase):
+
+    def _filter_notified_hosts(self, notified_hosts):
+        '''
+        Filter notified hosts accordingly to strategy
+        '''
+
+        # We act only on hosts that are ready to flush handlers
+        return [host for host in notified_hosts
+                if host in self._flushed_hosts and self._flushed_hosts[host]]
+
+    def __init__(self, tqm):
+        super(StrategyModule, self).__init__(tqm)
+        self._host_pinned = False
 
     def run(self, iterator, play_context):
         '''
@@ -68,6 +81,9 @@ class StrategyModule(StrategyBase):
 
         result = self._tqm.RUN_OK
 
+        # start with all workers being counted as being free
+        workers_free = len(self._workers)
+
         work_to_do = True
         while work_to_do and not self._tqm._terminated:
 
@@ -79,7 +95,7 @@ class StrategyModule(StrategyBase):
                 break
 
             work_to_do = False        # assume we have no more work to do
-            starting_host = last_host # save current position so we know when we've looped back around and need to break
+            starting_host = last_host  # save current position so we know when we've looped back around and need to break
 
             # try and find an unblocked host with a task to run
             host_results = []
@@ -91,15 +107,15 @@ class StrategyModule(StrategyBase):
                 # peek at the next task for the host, to see if there's
                 # anything to do do for this host
                 (state, task) = iterator.get_next_task_for_host(host, peek=True)
-                display.debug("free host state: %s" % state)
-                display.debug("free host task: %s" % task)
+                display.debug("free host state: %s" % state, host=host_name)
+                display.debug("free host task: %s" % task, host=host_name)
                 if host_name not in self._tqm._unreachable_hosts and task:
 
                     # set the flag so the outer loop knows we've still found
                     # some work which needs to be done
                     work_to_do = True
 
-                    display.debug("this host has work to do")
+                    display.debug("this host has work to do", host=host_name)
 
                     # check to see if this host is blocked (still executing a previous task)
                     if host_name not in self._blocked_hosts or not self._blocked_hosts[host_name]:
@@ -114,20 +130,19 @@ class StrategyModule(StrategyBase):
                             # corresponding action plugin
                             action = None
 
-                        display.debug("getting variables")
-                        task_vars = self._variable_manager.get_vars(loader=self._loader, play=iterator._play, host=host, task=task)
+                        display.debug("getting variables", host=host_name)
+                        task_vars = self._variable_manager.get_vars(play=iterator._play, host=host, task=task)
                         self.add_tqm_variables(task_vars, play=iterator._play)
                         templar = Templar(loader=self._loader, variables=task_vars)
-                        display.debug("done getting variables")
+                        display.debug("done getting variables", host=host_name)
 
                         try:
                             task.name = to_text(templar.template(task.name, fail_on_undefined=False), nonstring='empty')
-                            display.debug("done templating")
+                            display.debug("done templating", host=host_name)
                         except:
                             # just ignore any errors during task name templating,
                             # we don't care if it just shows the raw name
-                            display.debug("templating failed for some reason")
-                            pass
+                            display.debug("templating failed for some reason", host=host_name)
 
                         run_once = templar.template(task.run_once) or action and getattr(action, 'BYPASS_HOST_LOOP', False)
                         if run_once:
@@ -144,7 +159,7 @@ class StrategyModule(StrategyBase):
                             # If there is no metadata, the default behavior is to not allow duplicates,
                             # if there is metadata, check to see if the allow_duplicates flag was set to true
                             if task._role._metadata is None or task._role._metadata and not task._role._metadata.allow_duplicates:
-                                display.debug("'%s' skipped because role has already run" % task)
+                                display.debug("'%s' skipped because role has already run" % task, host=host_name)
                                 del self._blocked_hosts[host_name]
                                 continue
 
@@ -155,13 +170,21 @@ class StrategyModule(StrategyBase):
                             # handle step if needed, skip meta actions as they are used internally
                             if not self._step or self._take_step(task, host_name):
                                 if task.any_errors_fatal:
-                                    display.warning("Using any_errors_fatal with the free strategy is not supported,"
-                                            " as tasks are executed independently on each host")
+                                    display.warning("Using any_errors_fatal with the free strategy is not supported, "
+                                                    "as tasks are executed independently on each host")
                                 self._tqm.send_callback('v2_playbook_on_task_start', task, is_conditional=False)
                                 self._queue_task(host, task, task_vars, play_context)
+                                # each task is counted as a worker being busy
+                                workers_free -= 1
                                 del task_vars
                     else:
                         display.debug("%s is blocked, skipping for now" % host_name)
+
+                # all workers have tasks to do (and the current host isn't done with the play).
+                # loop back to starting host and break out
+                if self._host_pinned and workers_free == 0 and work_to_do:
+                    last_host = starting_host
+                    break
 
                 # move on to the next host and make sure we
                 # haven't gone past the end of our hosts list
@@ -176,12 +199,15 @@ class StrategyModule(StrategyBase):
             results = self._process_pending_results(iterator)
             host_results.extend(results)
 
+            # each result is counted as a worker being free again
+            workers_free += len(results)
+
+            self.update_active_connections(results)
+
             try:
                 included_files = IncludedFile.process_include_results(
                     host_results,
-                    self._tqm,
                     iterator=iterator,
-                    inventory=self._inventory,
                     loader=self._loader,
                     variable_manager=self._variable_manager
                 )
@@ -193,7 +219,17 @@ class StrategyModule(StrategyBase):
                 for included_file in included_files:
                     display.debug("collecting new blocks for %s" % included_file)
                     try:
-                        new_blocks = self._load_included_file(included_file, iterator=iterator)
+                        if included_file._is_role:
+                            new_ir = self._copy_included_file(included_file)
+
+                            new_blocks, handler_blocks = new_ir.get_block_list(
+                                play=iterator._play,
+                                variable_manager=self._variable_manager,
+                                loader=self._loader,
+                            )
+                            self._tqm.update_handler_list([handler for handler_block in handler_blocks for handler in handler_block.block])
+                        else:
+                            new_blocks = self._load_included_file(included_file, iterator=iterator)
                     except AnsibleError as e:
                         for host in included_file._hosts:
                             iterator.mark_host_failed(host)
@@ -201,7 +237,7 @@ class StrategyModule(StrategyBase):
                         continue
 
                     for new_block in new_blocks:
-                        task_vars = self._variable_manager.get_vars(loader=self._loader, play=iterator._play, task=included_file._task)
+                        task_vars = self._variable_manager.get_vars(play=iterator._play, task=new_block._parent)
                         final_block = new_block.filter_tagged_tasks(play_context, task_vars)
                         for host in hosts_left:
                             if host in included_file._hosts:

@@ -18,13 +18,16 @@ class Git(object):
         self.args = args
         self.git = 'git'
 
-    def get_diff(self, args):
+    def get_diff(self, args, git_options=None):
         """
         :type args: list[str]
+        :type git_options: list[str] | None
         :rtype: list[str]
         """
         cmd = ['diff'] + args
-        return self.run_git_split(cmd, '\n')
+        if git_options is None:
+            git_options = ['-c', 'core.quotePath=']
+        return self.run_git_split(git_options + cmd, '\n', str_errors='replace')
 
     def get_diff_names(self, args):
         """
@@ -56,6 +59,24 @@ class Git(object):
         cmd = ['symbolic-ref', '--short', 'HEAD']
         return self.run_git(cmd).strip()
 
+    def get_rev_list(self, commits=None, max_count=None):
+        """
+        :type commits: list[str] | None
+        :type max_count: int | None
+        :rtype: list[str]
+        """
+        cmd = ['rev-list']
+
+        if commits:
+            cmd += commits
+        else:
+            cmd += ['HEAD']
+
+        if max_count:
+            cmd += ['--max-count', '%s' % max_count]
+
+        return self.run_git_split(cmd)
+
     def get_branch_fork_point(self, branch):
         """
         :type branch: str
@@ -71,27 +92,29 @@ class Git(object):
         """
         cmd = ['show', ref]
         try:
-            self.run_git(cmd)
+            self.run_git(cmd, str_errors='replace')
             return True
         except SubprocessError:
             return False
 
-    def run_git_split(self, cmd, separator=None):
+    def run_git_split(self, cmd, separator=None, str_errors='strict'):
         """
         :type cmd: list[str]
-        :param separator: str | None
+        :type separator: str | None
+        :type str_errors: str
         :rtype: list[str]
         """
-        output = self.run_git(cmd).strip(separator)
+        output = self.run_git(cmd, str_errors=str_errors).strip(separator)
 
-        if len(output) == 0:
+        if not output:
             return []
 
         return output.split(separator)
 
-    def run_git(self, cmd):
+    def run_git(self, cmd, str_errors='strict'):
         """
         :type cmd: list[str]
+        :type str_errors: str
         :rtype: str
         """
-        return run_command(self.args, [self.git] + cmd, capture=True, always=True)[0]
+        return run_command(self.args, [self.git] + cmd, capture=True, always=True, str_errors=str_errors)[0]

@@ -18,7 +18,7 @@
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
                     'supported_by': 'community'}
 
@@ -145,6 +145,8 @@ EXAMPLES = """
 RETURN = """
 command:
   description: The CLI command run on the target node(s).
+  returned: always
+  type: str
 stdout:
   description: The set of responses from the trunk command.
   returned: always
@@ -160,6 +162,9 @@ changed:
 """
 
 import shlex
+
+# Ansible boiler-plate
+from ansible.module_utils.basic import AnsibleModule
 
 TRUNK_EXISTS = None
 
@@ -443,8 +448,6 @@ def main():
 
     run_cli(module, cli)
 
-# Ansible boiler-plate
-from ansible.module_utils.basic import AnsibleModule
 
 if __name__ == '__main__':
     main()

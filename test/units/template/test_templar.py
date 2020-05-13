@@ -28,8 +28,7 @@ from ansible import constants as C
 from ansible.errors import AnsibleError, AnsibleUndefinedVariable
 from ansible.module_utils.six import string_types
 from ansible.template import Templar, AnsibleContext, AnsibleEnvironment
-from ansible.vars.unsafe_proxy import AnsibleUnsafe, wrap_var
-#from ansible.unsafe_proxy import AnsibleUnsafe, wrap_var
+from ansible.utils.unsafe_proxy import AnsibleUnsafe, wrap_var
 from units.mock.loader import DictDataLoader
 
 
@@ -51,6 +50,7 @@ class BaseTemplar(object):
             some_unsafe_var=wrap_var("unsafe_blip"),
             some_static_unsafe_var=wrap_var("static_unsafe_blip"),
             some_unsafe_keyword=wrap_var("{{ foo }}"),
+            str_with_error="{{ 'str' | from_json }}",
         )
         self.fake_loader = DictDataLoader({
             "/path/to/my_file.txt": "foo\n",
@@ -100,8 +100,8 @@ class SomeUnsafeClass(AnsibleUnsafe):
 class TestTemplarTemplate(BaseTemplar, unittest.TestCase):
     def test_lookup_jinja_dict_key_in_static_vars(self):
         res = self.templar.template("{'some_static_var': '{{ some_var }}'}",
-                                   static_vars=['some_static_var'])
-        #self.assertEqual(res['{{ a_keyword }}'], "blip")
+                                    static_vars=['some_static_var'])
+        # self.assertEqual(res['{{ a_keyword }}'], "blip")
         print(res)
 
     def test_templatable(self):
@@ -118,28 +118,27 @@ class TestTemplarTemplate(BaseTemplar, unittest.TestCase):
         self.assertFalse(res)
 
     def test_template_convert_bare_string(self):
-        # Note: no bare_deprecated=False so we hit the deprecation path
         res = self.templar.template('foo', convert_bare=True)
         self.assertEqual(res, 'bar')
 
     def test_template_convert_bare_nested(self):
-        res = self.templar.template('bam', convert_bare=True, bare_deprecated=False)
+        res = self.templar.template('bam', convert_bare=True)
         self.assertEqual(res, 'bar')
 
     def test_template_convert_bare_unsafe(self):
-        res = self.templar.template('some_unsafe_var', convert_bare=True, bare_deprecated=False)
+        res = self.templar.template('some_unsafe_var', convert_bare=True)
         self.assertEqual(res, 'unsafe_blip')
-        #self.assertIsInstance(res, AnsibleUnsafe)
+        # self.assertIsInstance(res, AnsibleUnsafe)
         self.assertTrue(self.is_unsafe(res), 'returned value from template.template (%s) is not marked unsafe' % res)
 
     def test_template_convert_bare_filter(self):
-        res = self.templar.template('bam|capitalize', convert_bare=True, bare_deprecated=False)
+        res = self.templar.template('bam|capitalize', convert_bare=True)
         self.assertEqual(res, 'Bar')
 
     def test_template_convert_bare_filter_unsafe(self):
-        res = self.templar.template('some_unsafe_var|capitalize', convert_bare=True, bare_deprecated=False)
+        res = self.templar.template('some_unsafe_var|capitalize', convert_bare=True)
         self.assertEqual(res, 'Unsafe_blip')
-        #self.assertIsInstance(res, AnsibleUnsafe)
+        # self.assertIsInstance(res, AnsibleUnsafe)
         self.assertTrue(self.is_unsafe(res), 'returned value from template.template (%s) is not marked unsafe' % res)
 
     def test_template_convert_data(self):
@@ -178,12 +177,6 @@ class TestTemplarTemplate(BaseTemplar, unittest.TestCase):
         res = self.templar.template(unsafe_obj)
         self.assertTrue(self.is_unsafe(res), 'returned value from template.template (%s) is not marked unsafe' % res)
 
-    @patch('ansible.template.Templar._clean_data', side_effect=AnsibleError)
-    def test_template_unsafe_clean_data_exception(self, mock_clean_data):
-        self.assertRaises(AnsibleError,
-                          self.templar.template,
-                          wrap_var('blip bar'))
-
     # TODO: not sure what template is supposed to do it, but it currently throws attributeError
     @patch('ansible.template.Templar._clean_data')
     def test_template_unsafe_non_string_clean_data_exception(self, mock_clean_data):
@@ -207,6 +200,10 @@ class TestTemplarTemplate(BaseTemplar, unittest.TestCase):
                                 'template error while templating string',
                                 self.templar.template,
                                 data)
+
+    def test_template_with_error(self):
+        """Check that AnsibleError is raised, fail if an unhandled exception is raised"""
+        self.assertRaises(AnsibleError, self.templar.template, "{{ str_with_error }}")
 
 
 class TestTemplarCleanData(BaseTemplar, unittest.TestCase):
@@ -234,16 +231,11 @@ class TestTemplarCleanData(BaseTemplar, unittest.TestCase):
         self.assertEqual(res, u'1 2 {#what#} 3 4 {#foo#} 5 6 7')
 
     def test_clean_data_object(self):
-        obj = {'foo': [1, 2, 3, 'bdasdf', '{what}', '{{foo}}', 5]}
+        obj = {u'foo': [1, 2, 3, u'bdasdf', u'{what}', u'{{foo}}', 5]}
+        clean_obj = {u'foo': [1, 2, 3, u'bdasdf', u'{what}', u'{#foo#}', 5]}
         res = self.templar._clean_data(obj)
-        self.assertEqual(res, obj)
-
-    def test_clean_data_object_unsafe(self):
-        rval = [1, 2, 3, wrap_var('bdasdf'), '{what}', wrap_var('{{unsafe_foo}}'), 5]
-        obj = {'foo': rval}
-        res = self.templar._clean_data(obj)
-        self.assertEqual(res, obj)
-        self.assertTrue(self.is_unsafe(res), 'returned value of _clean_data (%s) is not marked unsafe.' % res)
+        self.assertNotEqual(res, obj)
+        self.assertEqual(res, clean_obj)
 
     def test_clean_data_bad_dict(self):
         res = self.templar._clean_data(u'{{bad_dict}}')
@@ -319,7 +311,7 @@ class TestTemplarMisc(BaseTemplar, unittest.TestCase):
 class TestTemplarLookup(BaseTemplar, unittest.TestCase):
     def test_lookup_missing_plugin(self):
         self.assertRaisesRegexp(AnsibleError,
-                                'lookup plugin \(not_a_real_lookup_plugin\) not found',
+                                r'lookup plugin \(not_a_real_lookup_plugin\) not found',
                                 self.templar._lookup,
                                 'not_a_real_lookup_plugin',
                                 'an_arg', a_keyword_arg='a_keyword_arg_value')
@@ -337,7 +329,7 @@ class TestTemplarLookup(BaseTemplar, unittest.TestCase):
     def test_lookup_jinja_defined(self):
         res = self.templar._lookup('list', '{{ some_var }}')
         self.assertTrue(self.is_unsafe(res))
-        #self.assertIsInstance(res, AnsibleUnsafe)
+        # self.assertIsInstance(res, AnsibleUnsafe)
 
     def test_lookup_jinja_dict_string_passed(self):
         self.assertRaisesRegexp(AnsibleError,
@@ -356,7 +348,7 @@ class TestTemplarLookup(BaseTemplar, unittest.TestCase):
     def test_lookup_jinja_kwargs(self):
         res = self.templar._lookup('list', 'blip', random_keyword='12345')
         self.assertTrue(self.is_unsafe(res))
-        #self.assertIsInstance(res, AnsibleUnsafe)
+        # self.assertIsInstance(res, AnsibleUnsafe)
 
     def test_lookup_jinja_list_wantlist(self):
         res = self.templar._lookup('list', '{{ some_var }}', wantlist=True)
@@ -374,7 +366,7 @@ class TestTemplarLookup(BaseTemplar, unittest.TestCase):
         res = self.templar._lookup('list', '{{ some_unsafe_var }}', wantlist=True)
         for lookup_result in res:
             self.assertTrue(self.is_unsafe(lookup_result))
-            #self.assertIsInstance(lookup_result, AnsibleUnsafe)
+            # self.assertIsInstance(lookup_result, AnsibleUnsafe)
 
         # Should this be an AnsibleUnsafe
         # self.assertIsInstance(res, AnsibleUnsafe)
@@ -383,22 +375,22 @@ class TestTemplarLookup(BaseTemplar, unittest.TestCase):
         res = self.templar._lookup('list', {'{{ a_keyword }}': '{{ some_var }}'})
         self.assertEqual(res['{{ a_keyword }}'], "blip")
         # TODO: Should this be an AnsibleUnsafe
-        #self.assertIsInstance(res['{{ a_keyword }}'], AnsibleUnsafe)
-        #self.assertIsInstance(res, AnsibleUnsafe)
+        # self.assertIsInstance(res['{{ a_keyword }}'], AnsibleUnsafe)
+        # self.assertIsInstance(res, AnsibleUnsafe)
 
     def test_lookup_jinja_dict_unsafe(self):
         res = self.templar._lookup('list', {'{{ some_unsafe_key }}': '{{ some_unsafe_var }}'})
         self.assertTrue(self.is_unsafe(res['{{ some_unsafe_key }}']))
-        #self.assertIsInstance(res['{{ some_unsafe_key }}'], AnsibleUnsafe)
+        # self.assertIsInstance(res['{{ some_unsafe_key }}'], AnsibleUnsafe)
         # TODO: Should this be an AnsibleUnsafe
-        #self.assertIsInstance(res, AnsibleUnsafe)
+        # self.assertIsInstance(res, AnsibleUnsafe)
 
     def test_lookup_jinja_dict_unsafe_value(self):
         res = self.templar._lookup('list', {'{{ a_keyword }}': '{{ some_unsafe_var }}'})
         self.assertTrue(self.is_unsafe(res['{{ a_keyword }}']))
-        #self.assertIsInstance(res['{{ a_keyword }}'], AnsibleUnsafe)
+        # self.assertIsInstance(res['{{ a_keyword }}'], AnsibleUnsafe)
         # TODO: Should this be an AnsibleUnsafe
-        #self.assertIsInstance(res, AnsibleUnsafe)
+        # self.assertIsInstance(res, AnsibleUnsafe)
 
     def test_lookup_jinja_none(self):
         res = self.templar._lookup('list', None)
@@ -426,14 +418,14 @@ class TestAnsibleContext(BaseTemplar, unittest.TestCase):
     def test_resolve_unsafe(self):
         context = self._context(variables={'some_unsafe_key': wrap_var('some_unsafe_string')})
         res = context.resolve('some_unsafe_key')
-        #self.assertIsInstance(res, AnsibleUnsafe)
+        # self.assertIsInstance(res, AnsibleUnsafe)
         self.assertTrue(self.is_unsafe(res),
                         'return of AnsibleContext.resolve (%s) was expected to be marked unsafe but was not' % res)
 
     def test_resolve_unsafe_list(self):
         context = self._context(variables={'some_unsafe_key': [wrap_var('some unsafe string 1')]})
         res = context.resolve('some_unsafe_key')
-        #self.assertIsInstance(res[0], AnsibleUnsafe)
+        # self.assertIsInstance(res[0], AnsibleUnsafe)
         self.assertTrue(self.is_unsafe(res),
                         'return of AnsibleContext.resolve (%s) was expected to be marked unsafe but was not' % res)
 
@@ -449,7 +441,7 @@ class TestAnsibleContext(BaseTemplar, unittest.TestCase):
         context = self._context(variables={'some_key': 'some_string'})
         res = context.resolve('some_key')
         self.assertEqual(res, 'some_string')
-        #self.assertNotIsInstance(res, AnsibleUnsafe)
+        # self.assertNotIsInstance(res, AnsibleUnsafe)
         self.assertFalse(self.is_unsafe(res),
                          'return of AnsibleContext.resolve (%s) was not expected to be marked unsafe but was' % res)
 
@@ -457,6 +449,6 @@ class TestAnsibleContext(BaseTemplar, unittest.TestCase):
         context = self._context(variables={'some_key': None})
         res = context.resolve('some_key')
         self.assertEqual(res, None)
-        #self.assertNotIsInstance(res, AnsibleUnsafe)
+        # self.assertNotIsInstance(res, AnsibleUnsafe)
         self.assertFalse(self.is_unsafe(res),
                          'return of AnsibleContext.resolve (%s) was not expected to be marked unsafe but was' % res)

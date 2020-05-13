@@ -40,7 +40,7 @@ class RoleInclude(RoleDefinition):
     is included for execution in a play.
     """
 
-    _delegate_to    = FieldAttribute(isa='string')
+    _delegate_to = FieldAttribute(isa='string')
     _delegate_facts = FieldAttribute(isa='bool', default=False)
 
     def __init__(self, play=None, role_basedir=None, variable_manager=None, loader=None):
@@ -53,8 +53,7 @@ class RoleInclude(RoleDefinition):
             raise AnsibleParserError("Invalid role definition: %s" % to_native(data))
 
         if isinstance(data, string_types) and ',' in data:
-            data = RoleRequirement.role_spec_parse(data)
+            raise AnsibleError("Invalid old style role requirement: %s" % data)
 
         ri = RoleInclude(play=play, role_basedir=current_role_path, variable_manager=variable_manager, loader=loader)
         return ri.load_data(data, variable_manager=variable_manager, loader=loader)
-

@@ -1,1 +1,5 @@
-posix/ci/group2
+setup/always/setup_passlib
+shippable/posix/group2
+skip/osx
+destructive
+needs/root

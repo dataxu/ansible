@@ -39,9 +39,10 @@ class ActionModule(_ActionModule):
             try:
                 self._handle_template()
             except ValueError as exc:
-                return dict(failed=True, msg=exc.message)
+                return dict(failed=True, msg=to_text(exc))
 
         result = super(ActionModule, self).run(tmp, task_vars)
+        del tmp  # tmp no longer has any effect
 
         if self._task.args.get('backup') and result.get('__backup__'):
             # User requested backup and no error occurred in module.
@@ -53,7 +54,7 @@ class ActionModule(_ActionModule):
 
         # strip out any keys that have two leading and two trailing
         # underscore characters
-        for key in result.keys():
+        for key in list(result):
             if PRIVATE_KEYS_RE.match(key):
                 del result[key]
 
@@ -69,7 +70,7 @@ class ActionModule(_ActionModule):
         backup_path = self._get_working_path() + '/backup'
         if not os.path.exists(backup_path):
             os.mkdir(backup_path)
-        for fn in glob.glob('%s/%s*' % (backup_path, host)):
+        for fn in glob.glob('%s/%s_config.*' % (backup_path, host)):
             os.remove(fn)
         tstamp = time.strftime("%Y-%m-%d@%H:%M:%S", time.localtime(time.time()))
         filename = '%s/%s_config.%s' % (backup_path, host, tstamp)

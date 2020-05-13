@@ -150,6 +150,7 @@ from click.exceptions import UsageError
 
 from six import string_types
 
+
 def warning(*objs):
     print("WARNING: ", *objs, file=sys.stderr)
 
@@ -337,6 +338,7 @@ def main():
         print(client.do_list())
     elif args.host:
         print(client.do_host(args.host))
+
 
 if __name__ == '__main__':
     main()

@@ -3,24 +3,13 @@
 
 # (c) 2012, David "DaviXX" CHANIAL <david.chanial@gmail.com>
 # (c) 2014, James Tanner <tanner.jc@gmail.com>
-#
-# This file is part of Ansible
-#
-# Ansible is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Ansible is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
-#
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+from __future__ import absolute_import, division, print_function
+__metaclass__ = type
+
+
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['stableinterface'],
                     'supported_by': 'core'}
 
@@ -37,13 +26,10 @@ options:
         description:
             - The dot-separated path (aka I(key)) specifying the sysctl variable.
         required: true
-        default: null
         aliases: [ 'key' ]
     value:
         description:
             - Desired value of the sysctl key.
-        required: false
-        default: null
         aliases: [ 'val' ]
     state:
         description:
@@ -53,29 +39,25 @@ options:
     ignoreerrors:
         description:
             - Use this option to ignore errors about unknown keys.
-        choices: [ "yes", "no" ]
-        default: no
+        type: bool
+        default: 'no'
     reload:
         description:
             - If C(yes), performs a I(/sbin/sysctl -p) if the C(sysctl_file) is
               updated. If C(no), does not reload I(sysctl) even if the
               C(sysctl_file) is updated.
-        choices: [ "yes", "no" ]
-        default: "yes"
+        type: bool
+        default: 'yes'
     sysctl_file:
         description:
             - Specifies the absolute path to C(sysctl.conf), if not C(/etc/sysctl.conf).
-        required: false
         default: /etc/sysctl.conf
     sysctl_set:
         description:
             - Verify token value with the sysctl command and set with -w if necessary
-        choices: [ "yes", "no" ]
-        required: false
+        type: bool
+        default: 'no'
         version_added: 1.5
-        default: False
-notes: []
-requirements: []
 author: "David CHANIAL (@davixx) <david.chanial@gmail.com>"
 '''
 
@@ -99,7 +81,7 @@ EXAMPLES = '''
     sysctl_file: /tmp/test_sysctl.conf
     reload: no
 
-# Set ip forwarding on in /proc and do not reload the sysctl file
+# Set ip forwarding on in /proc and verify token value with the sysctl command
 - sysctl:
     name: net.ipv4.ip_forward
     value: 1
@@ -117,11 +99,20 @@ EXAMPLES = '''
 # ==============================================================
 
 import os
+import re
 import tempfile
-from ansible.module_utils.basic import get_platform, get_exception, AnsibleModule, BOOLEANS_TRUE, BOOLEANS_FALSE
+
+from ansible.module_utils.basic import get_platform, AnsibleModule
+from ansible.module_utils.six import string_types
+from ansible.module_utils.parsing.convert_bool import BOOLEANS_FALSE, BOOLEANS_TRUE
+from ansible.module_utils._text import to_native
 
 
 class SysctlModule(object):
+
+    # We have to use LANG=C because we are capturing STDERR of sysctl to detect
+    # success or failure.
+    LANG_ENV = {'LANG': 'C', 'LC_ALL': 'C', 'LC_MESSAGES': 'C'}
 
     def __init__(self, module):
         self.module = module
@@ -137,7 +128,7 @@ class SysctlModule(object):
 
         self.changed = False    # will change occur
         self.set_proc = False   # does sysctl need to set value
-        self.write_file = False # does the sysctl file need to be reloaded
+        self.write_file = False  # does the sysctl file need to be reloaded
 
         self.process()
 
@@ -172,6 +163,9 @@ class SysctlModule(object):
             self.write_file = True
         elif self.file_values[thisname] is None and self.args['state'] == "absent":
             self.changed = False
+        elif self.file_values[thisname] and self.args['state'] == "absent":
+            self.changed = True
+            self.write_file = True
         elif self.file_values[thisname] != self.args['value']:
             self.changed = True
             self.write_file = True
@@ -216,7 +210,7 @@ class SysctlModule(object):
                 return '1'
             else:
                 return '0'
-        elif isinstance(value, basestring):
+        elif isinstance(value, string_types):
             if value.lower() in BOOLEANS_TRUE:
                 return '1'
             elif value.lower() in BOOLEANS_FALSE:
@@ -225,6 +219,14 @@ class SysctlModule(object):
                 return value.strip()
         else:
             return value
+
+    def _stderr_failed(self, err):
+        # sysctl can fail to set a value even if it returns an exit status 0
+        # (https://bugzilla.redhat.com/show_bug.cgi?id=1264080). That's why we
+        # also have to check stderr for errors. For now we will only fail on
+        # specific errors defined by the regex below.
+        errors_regex = r'^sysctl: setting key "[^"]+": (Invalid argument|Read-only file system)$'
+        return re.search(errors_regex, err, re.MULTILINE) is not None
 
     # ==============================================================
     #   SYSCTL COMMAND MANAGEMENT
@@ -237,7 +239,7 @@ class SysctlModule(object):
             thiscmd = "%s -n %s" % (self.sysctl_cmd, token)
         else:
             thiscmd = "%s -e -n %s" % (self.sysctl_cmd, token)
-        rc,out,err = self.module.run_command(thiscmd)
+        rc, out, err = self.module.run_command(thiscmd, environ_update=self.LANG_ENV)
         if rc != 0:
             return None
         else:
@@ -261,8 +263,8 @@ class SysctlModule(object):
             if self.args['ignoreerrors']:
                 ignore_missing = '-e'
             thiscmd = "%s %s -w %s=%s" % (self.sysctl_cmd, ignore_missing, token, value)
-        rc,out,err = self.module.run_command(thiscmd)
-        if rc != 0:
+        rc, out, err = self.module.run_command(thiscmd, environ_update=self.LANG_ENV)
+        if rc != 0 or self._stderr_failed(err):
             self.module.fail_json(msg='setting %s failed: %s' % (token, out + err))
         else:
             return rc
@@ -272,7 +274,7 @@ class SysctlModule(object):
         # do it
         if self.platform == 'freebsd':
             # freebsd doesn't support -p, so reload the sysctl service
-            rc,out,err = self.module.run_command('/etc/rc.d/sysctl reload')
+            rc, out, err = self.module.run_command('/etc/rc.d/sysctl reload', environ_update=self.LANG_ENV)
         elif self.platform == 'openbsd':
             # openbsd doesn't support -p and doesn't have a sysctl service,
             # so we have to set every value with its own sysctl call
@@ -290,9 +292,9 @@ class SysctlModule(object):
             if self.args['ignoreerrors']:
                 sysctl_args.insert(1, '-e')
 
-            rc,out,err = self.module.run_command(sysctl_args)
+            rc, out, err = self.module.run_command(sysctl_args, environ_update=self.LANG_ENV)
 
-        if rc != 0:
+        if rc != 0 or self._stderr_failed(err):
             self.module.fail_json(msg="Failed to reload sysctl: %s" % str(out) + str(err))
 
     # ==============================================================
@@ -305,22 +307,20 @@ class SysctlModule(object):
         lines = []
         if os.path.isfile(self.sysctl_file):
             try:
-                f = open(self.sysctl_file, "r")
-                lines = f.readlines()
-                f.close()
-            except IOError:
-                e = get_exception()
-                self.module.fail_json(msg="Failed to open %s: %s" % (self.sysctl_file, str(e)))
+                with open(self.sysctl_file, "r") as read_file:
+                    lines = read_file.readlines()
+            except IOError as e:
+                self.module.fail_json(msg="Failed to open %s: %s" % (self.sysctl_file, to_native(e)))
 
         for line in lines:
             line = line.strip()
             self.file_lines.append(line)
 
-            # don't split empty lines or comments
-            if not line or line.startswith(("#", ";")):
+            # don't split empty lines or comments or line without equal sign
+            if not line or line.startswith(("#", ";")) or "=" not in line:
                 continue
 
-            k, v = line.split('=',1)
+            k, v = line.split('=', 1)
             k = k.strip()
             v = v.strip()
             self.file_values[k] = v.strip()
@@ -330,11 +330,11 @@ class SysctlModule(object):
         checked = []
         self.fixed_lines = []
         for line in self.file_lines:
-            if not line.strip() or line.strip().startswith(("#", ";")):
+            if not line.strip() or line.strip().startswith(("#", ";")) or "=" not in line:
                 self.fixed_lines.append(line)
                 continue
             tmpline = line.strip()
-            k, v = line.split('=',1)
+            k, v = tmpline.split('=', 1)
             k = k.strip()
             v = v.strip()
             if k not in checked:
@@ -355,13 +355,12 @@ class SysctlModule(object):
     def write_sysctl(self):
         # open a tmp file
         fd, tmp_path = tempfile.mkstemp('.conf', '.ansible_m_sysctl_', os.path.dirname(self.sysctl_file))
-        f = open(tmp_path,"w")
+        f = open(tmp_path, "w")
         try:
             for l in self.fixed_lines:
                 f.write(l.strip() + "\n")
-        except IOError:
-            e = get_exception()
-            self.module.fail_json(msg="Failed to write to file %s: %s" % (tmp_path, str(e)))
+        except IOError as e:
+            self.module.fail_json(msg="Failed to write to file %s: %s" % (tmp_path, to_native(e)))
         f.flush()
         f.close()
 
@@ -376,22 +375,34 @@ def main():
 
     # defining module
     module = AnsibleModule(
-        argument_spec = dict(
-            name = dict(aliases=['key'], required=True),
-            value = dict(aliases=['val'], required=False, type='str'),
-            state = dict(default='present', choices=['present', 'absent']),
-            reload = dict(default=True, type='bool'),
-            sysctl_set = dict(default=False, type='bool'),
-            ignoreerrors = dict(default=False, type='bool'),
-            sysctl_file = dict(default='/etc/sysctl.conf', type='path')
+        argument_spec=dict(
+            name=dict(aliases=['key'], required=True),
+            value=dict(aliases=['val'], required=False, type='str'),
+            state=dict(default='present', choices=['present', 'absent']),
+            reload=dict(default=True, type='bool'),
+            sysctl_set=dict(default=False, type='bool'),
+            ignoreerrors=dict(default=False, type='bool'),
+            sysctl_file=dict(default='/etc/sysctl.conf', type='path')
         ),
-        supports_check_mode=True
+        supports_check_mode=True,
+        required_if=[('state', 'present', ['value'])],
     )
+
+    if module.params['name'] is None:
+        module.fail_json(msg="name cannot be None")
+    if module.params['state'] == 'present' and module.params['value'] is None:
+        module.fail_json(msg="value cannot be None")
+
+    # In case of in-line params
+    if module.params['name'] == '':
+        module.fail_json(msg="name cannot be blank")
+    if module.params['state'] == 'present' and module.params['value'] == '':
+        module.fail_json(msg="value cannot be blank")
 
     result = SysctlModule(module)
 
     module.exit_json(changed=result.changed)
 
-# import module snippets
+
 if __name__ == '__main__':
     main()

@@ -1,20 +1,12 @@
 #!/usr/bin/python
-# This file is part of Ansible
-#
-# Ansible is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Ansible is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
+# Copyright: Ansible Project
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
-ANSIBLE_METADATA = {'metadata_version': '1.0',
+from __future__ import absolute_import, division, print_function
+__metaclass__ = type
+
+
+ANSIBLE_METADATA = {'metadata_version': '1.1',
                     'status': ['preview'],
                     'supported_by': 'community'}
 
@@ -56,9 +48,10 @@ options:
   next_marker:
     description:
       - "Some requests such as list_command: hosted_zones will return a maximum
-        number of entries - EG 100. If the number of entries exceeds this maximum
-        another request can be sent using the NextMarker entry from the first response
-        to get the next page of results"
+        number of entries - EG 100 or the number specified by max_items.
+        If the number of entries exceeds this maximum another request can be sent
+        using the NextMarker entry from the first response to get the next page
+        of results"
     required: false
   delegation_set_id:
     description:
@@ -73,7 +66,7 @@ options:
     description:
       - The type of DNS record
     required: false
-    choices: [ 'A', 'CNAME', 'MX', 'AAAA', 'TXT', 'PTR', 'SRV', 'SPF', 'NS' ]
+    choices: [ 'A', 'CNAME', 'MX', 'AAAA', 'TXT', 'PTR', 'SRV', 'SPF', 'CAA', 'NS' ]
   dns_name:
     description:
       - The first name in the lexicographic ordering of domain names that you want
@@ -117,8 +110,10 @@ options:
         'tags',
         ]
     default: 'list'
-author: Karen Cheng(@Etherdaemon)
-extends_documentation_fragment: aws
+author: Karen Cheng (@Etherdaemon)
+extends_documentation_fragment:
+  - aws
+  - ec2
 '''
 
 EXAMPLES = '''
@@ -163,6 +158,18 @@ EXAMPLES = '''
     delegation_set_id: delegation id
   register: delegation_sets
 
+- name: setup of example for using next_marker
+  route53_facts:
+    query: hosted_zone
+    max_items: 1
+  register: first_facts
+
+- name: example for using next_marker
+  route53_facts:
+    query: hosted_zone
+    next_marker: "{{ first_facts.NextMarker }}"
+    max_items: 1
+  when: "{{ 'NextMarker' in first_facts }}"
 '''
 try:
     import boto
@@ -384,7 +391,7 @@ def main():
         delegation_set_id=dict(),
         start_record_name=dict(),
         type=dict(choices=[
-            'A', 'CNAME', 'MX', 'AAAA', 'TXT', 'PTR', 'SRV', 'SPF', 'NS'
+            'A', 'CNAME', 'MX', 'AAAA', 'TXT', 'PTR', 'SRV', 'SPF', 'CAA', 'NS'
         ]),
         dns_name=dict(),
         resource_id=dict(type='list', aliases=['resource_ids']),
@@ -404,7 +411,7 @@ def main():
             'count',
             'tags',
         ], default='list'),
-        )
+    )
     )
 
     module = AnsibleModule(
